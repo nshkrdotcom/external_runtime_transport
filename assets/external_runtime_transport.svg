@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">External Runtime Transport</title>
+  <desc id="desc">A symmetric hexagonal emblem with layered transport circuitry.</desc>
+  <defs>
+    <linearGradient id="hexStroke" x1="36" y1="28" x2="164" y2="172" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="0.52" stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="coreFill" x1="62" y1="54" x2="138" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FAFC" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#CFFAFE" stop-opacity="0.78"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(100 100) rotate(90) scale(76)">
+      <stop offset="0" stop-color="#67E8F9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#67E8F9" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="18" y="16" width="164" height="168" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+
+  <g opacity="0.85">
+    <path d="M100 18L160.62 53V123L100 158L39.38 123V53L100 18Z" fill="url(#coreGlow)" filter="url(#softGlow)"/>
+  </g>
+
+  <g>
+    <path
+      d="M100 22L157.16 55V121L100 154L42.84 121V55L100 22Z"
+      fill="rgba(255,255,255,0.02)"
+      stroke="url(#hexStroke)"
+      stroke-width="6"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M100 38L143.3 63V113L100 138L56.7 113V63L100 38Z"
+      fill="url(#coreFill)"
+      stroke="#0F172A"
+      stroke-opacity="0.12"
+      stroke-width="2.5"
+      stroke-linejoin="round"
+    />
+  </g>
+
+  <g stroke="#0F172A" stroke-opacity="0.72" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M100 58V82"/>
+    <path d="M79.22 70L100 82L120.78 70"/>
+    <path d="M79.22 130L100 118L120.78 130"/>
+    <path d="M100 118V142"/>
+    <path d="M65.36 90H88"/>
+    <path d="M112 90H134.64"/>
+    <path d="M65.36 110H88"/>
+    <path d="M112 110H134.64"/>
+    <path d="M88 90L100 82L112 90"/>
+    <path d="M88 110L100 118L112 110"/>
+  </g>
+
+  <g fill="#0F172A">
+    <circle cx="100" cy="82" r="5.2"/>
+    <circle cx="100" cy="118" r="5.2"/>
+    <circle cx="88" cy="90" r="4.1"/>
+    <circle cx="112" cy="90" r="4.1"/>
+    <circle cx="88" cy="110" r="4.1"/>
+    <circle cx="112" cy="110" r="4.1"/>
+  </g>
+
+  <g fill="#14B8A6">
+    <circle cx="100" cy="58" r="4.2"/>
+    <circle cx="100" cy="142" r="4.2"/>
+    <circle cx="65.36" cy="90" r="4.2"/>
+    <circle cx="134.64" cy="90" r="4.2"/>
+    <circle cx="65.36" cy="110" r="4.2"/>
+    <circle cx="134.64" cy="110" r="4.2"/>
+  </g>
+
+  <g stroke="#38BDF8" stroke-opacity="0.9" stroke-width="1.8">
+    <path d="M100 46L134.64 66"/>
+    <path d="M65.36 66L100 46"/>
+    <path d="M65.36 134L100 154"/>
+    <path d="M100 154L134.64 134"/>
+    <path d="M48.04 78L48.04 122"/>
+    <path d="M151.96 78V122"/>
+  </g>
+</svg>
