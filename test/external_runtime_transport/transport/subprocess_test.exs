@@ -147,6 +147,34 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
                    2_000
   end
 
+  test "short-lived local subprocesses keep the shared exec worker stable across exits" do
+    script = create_test_script("printf 'ready\\n'")
+
+    Enum.each([{"pipe", []}, {"pty", [pty?: true]}], fn {label, opts} ->
+      ref = make_ref()
+
+      assert {:ok, transport} =
+               Subprocess.start(Keyword.merge([command: script, subscriber: {self(), ref}], opts)),
+             "failed to start #{label} transport"
+
+      exec_pid = Process.whereis(:exec)
+      assert is_pid(exec_pid), "expected shared exec worker for #{label} transport"
+      monitor_ref = Process.monitor(exec_pid)
+
+      assert_receive {:external_runtime_transport, ^ref, {:message, "ready"}}, 2_000
+
+      assert_receive {:external_runtime_transport, ^ref,
+                      {:exit, %ProcessExit{status: :success, code: 0}}},
+                     2_000
+
+      assert :disconnected == Transport.status(transport)
+      refute_receive {:DOWN, ^monitor_ref, :process, ^exec_pid, _reason}, 0
+      assert Process.whereis(:exec) == exec_pid
+
+      Process.demonitor(monitor_ref, [:flush])
+    end)
+  end
+
   test "configured stdin interrupt payloads are written exactly to stdin" do
     ref = make_ref()
 

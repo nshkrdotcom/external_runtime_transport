@@ -74,17 +74,18 @@ defmodule ExternalRuntimeTransport.MixProject do
 
   defp docs do
     [
-      main: "readme",
+      main: "overview",
       source_ref: "v#{@version}",
       source_url: @source_url,
       homepage_url: @homepage_url,
       assets: %{"assets" => "assets"},
       logo: "assets/external_runtime_transport.svg",
       extras: [
-        "README.md": [title: "Overview"],
+        "README.md": [title: "Overview", filename: "overview"],
         "guides/getting-started.md": [title: "Getting Started"],
         "guides/execution-surface-contract.md": [title: "Execution Surface Contract"],
         "guides/guest-bridge-contract.md": [title: "Guest Bridge Contract"],
+        "examples/README.md": [title: "Examples", filename: "examples"],
         "CHANGELOG.md": [title: "Changelog"],
         LICENSE: [title: "License"]
       ],
@@ -95,6 +96,7 @@ defmodule ExternalRuntimeTransport.MixProject do
           "guides/execution-surface-contract.md",
           "guides/guest-bridge-contract.md"
         ],
+        Examples: ["examples/README.md"],
         "Project Reference": ["CHANGELOG.md", "LICENSE"]
       ],
       formatters: ["html", "epub", "markdown"]
