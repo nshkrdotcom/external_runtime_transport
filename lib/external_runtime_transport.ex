@@ -1,6 +1,10 @@
 defmodule ExternalRuntimeTransport do
   @moduledoc """
-  Minimal runtime metadata and boundary helpers for external transport work.
+  Shared execution-surface substrate for process placement.
+
+  The package owns the generic `execution_surface` contract plus the raw
+  transport adapters that currently land as `:local_subprocess`, `:ssh_exec`,
+  and `:guest_bridge`.
   """
 
   @doc """
@@ -12,7 +16,11 @@ defmodule ExternalRuntimeTransport do
       %{app: :external_runtime_transport, domain: :transport, module: ExternalRuntimeTransport}
 
   """
-  @spec metadata() :: %{app: atom(), domain: atom(), module: module()}
+  @spec metadata() :: %{
+          app: :external_runtime_transport,
+          domain: :transport,
+          module: ExternalRuntimeTransport
+        }
   def metadata do
     %{
       app: :external_runtime_transport,
