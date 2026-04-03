@@ -98,6 +98,7 @@ ref = make_ref()
 The public placement contract is one `execution_surface` value with these
 fields:
 
+- `contract_version`
 - `surface_kind`
 - `transport_options`
 - `target_id`
@@ -109,6 +110,9 @@ fields:
 The contract does not expose adapter module names. Callers choose placement by
 describing the surface, and the substrate resolves the built-in adapter
 internally.
+
+Use `ExternalRuntimeTransport.ExecutionSurface.to_map/1` when you need the
+versioned map projection for JSON-safe boundaries.
 
 Supported built-in surface kinds today are:
 

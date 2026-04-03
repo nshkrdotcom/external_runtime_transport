@@ -66,7 +66,7 @@ defmodule ExternalRuntimeTransport.Transport.Options do
           target_id: String.t() | nil,
           lease_ref: String.t() | nil,
           surface_ref: String.t() | nil,
-          boundary_class: atom() | nil,
+          boundary_class: ExecutionSurface.boundary_class(),
           observability: map(),
           adapter_capabilities: Capabilities.t() | nil,
           effective_capabilities: Capabilities.t() | nil,

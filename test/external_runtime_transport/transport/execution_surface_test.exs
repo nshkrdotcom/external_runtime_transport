@@ -109,4 +109,33 @@ defmodule ExternalRuntimeTransport.ExecutionSurfaceTest do
              request_timeout_ms: nil
            ]
   end
+
+  test "new/1 carries the execution-surface contract version and string boundary classes" do
+    assert {:ok, %ExecutionSurface{} = surface} =
+             ExecutionSurface.new(
+               contract_version: "execution_surface.v1",
+               surface_kind: :ssh_exec,
+               boundary_class: "remote_cli",
+               observability: %{suite: :contract}
+             )
+
+    assert surface.contract_version == "execution_surface.v1"
+    assert surface.boundary_class == "remote_cli"
+
+    assert ExecutionSurface.to_map(surface) == %{
+             contract_version: "execution_surface.v1",
+             surface_kind: :ssh_exec,
+             transport_options: %{},
+             target_id: nil,
+             lease_ref: nil,
+             surface_ref: nil,
+             boundary_class: "remote_cli",
+             observability: %{suite: :contract}
+           }
+  end
+
+  test "new/1 rejects unsupported execution-surface contract versions" do
+    assert {:error, {:invalid_contract_version, "execution_surface.v0"}} =
+             ExecutionSurface.new(contract_version: "execution_surface.v0")
+  end
 end

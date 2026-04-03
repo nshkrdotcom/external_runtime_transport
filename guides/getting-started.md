@@ -77,6 +77,7 @@ Tagged subscribers receive:
 
 Every public placement call stays on one `execution_surface` seam. It carries:
 
+- `contract_version`
 - `surface_kind`
 - `transport_options`
 - `target_id`
@@ -86,6 +87,9 @@ Every public placement call stays on one `execution_surface` seam. It carries:
 - `observability`
 
 It does not carry adapter module names.
+
+`ExternalRuntimeTransport.ExecutionSurface.to_map/1` projects the struct form
+into the versioned map form for boundary exchange.
 
 Built-in surfaces today are:
 

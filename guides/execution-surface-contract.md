@@ -7,6 +7,7 @@ across the runtime stack.
 
 An execution surface carries:
 
+- `contract_version`
 - `surface_kind`
 - `transport_options`
 - `target_id`
@@ -31,6 +32,9 @@ Do not put these concerns into `execution_surface`:
 - provider feature flags
 
 Those concerns belong in the transport invocation or in higher runtime layers.
+
+Use `ExecutionSurface.to_map/1` when the surface needs to cross a JSON-oriented
+boundary. The projected form always carries the current contract version.
 
 ## Built-In Surface Kinds
 

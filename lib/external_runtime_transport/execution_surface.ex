@@ -15,8 +15,10 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
 
   alias ExternalRuntimeTransport.ExecutionSurface.{Capabilities, Registry}
 
+  @contract_version "execution_surface.v1"
   @default_surface_kind :local_subprocess
   @reserved_keys [
+    :contract_version,
     :surface_kind,
     :transport_options,
     :target_id,
@@ -27,7 +29,8 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
   ]
   @forbidden_transport_option_keys [:command, :args, :cwd, :env, :clear_env?, :user]
 
-  defstruct surface_kind: @default_surface_kind,
+  defstruct contract_version: @contract_version,
+            surface_kind: @default_surface_kind,
             transport_options: [],
             target_id: nil,
             lease_ref: nil,
@@ -35,10 +38,13 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
             boundary_class: nil,
             observability: %{}
 
+  @type contract_version :: String.t()
   @type surface_kind :: :local_subprocess | :ssh_exec | :guest_bridge
   @type adapter_surface_kind :: atom()
+  @type boundary_class :: atom() | String.t() | nil
   @type reserved_key ::
-          :surface_kind
+          :contract_version
+          | :surface_kind
           | :transport_options
           | :target_id
           | :lease_ref
@@ -47,17 +53,30 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
           | :observability
 
   @type t :: %__MODULE__{
+          contract_version: contract_version(),
           surface_kind: surface_kind(),
           transport_options: keyword(),
           target_id: String.t() | nil,
           lease_ref: String.t() | nil,
           surface_ref: String.t() | nil,
-          boundary_class: atom() | nil,
+          boundary_class: boundary_class(),
           observability: map()
         }
 
+  @type projected_t :: %{
+          required(:contract_version) => contract_version(),
+          required(:surface_kind) => surface_kind(),
+          required(:transport_options) => map(),
+          required(:target_id) => String.t() | nil,
+          required(:lease_ref) => String.t() | nil,
+          required(:surface_ref) => String.t() | nil,
+          required(:boundary_class) => boundary_class(),
+          required(:observability) => map()
+        }
+
   @type validation_error ::
-          {:invalid_surface_kind, term()}
+          {:invalid_contract_version, term()}
+          | {:invalid_surface_kind, term()}
           | {:invalid_transport_options, term()}
           | {:invalid_execution_surface, term()}
           | {:invalid_target_id, term()}
@@ -84,6 +103,9 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
 
   @spec default_surface_kind() :: :local_subprocess
   def default_surface_kind, do: @default_surface_kind
+
+  @spec contract_version() :: String.t()
+  def contract_version, do: @contract_version
 
   @spec reserved_keys() :: [reserved_key(), ...]
   def reserved_keys, do: @reserved_keys
@@ -157,6 +179,7 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
   @spec new(keyword()) :: {:ok, t()} | {:error, validation_error()}
   def new(opts) when is_list(opts) do
     with {:ok, attrs} <- execution_surface_attrs(opts),
+         :ok <- validate_contract_version(Keyword.get(attrs, :contract_version)),
          {:ok, surface_kind} <- normalize_surface_kind(Keyword.get(attrs, :surface_kind)),
          {:ok, transport_options} <-
            normalize_transport_options(Keyword.get(attrs, :transport_options)),
@@ -167,6 +190,7 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
          :ok <- validate_observability(Keyword.get(attrs, :observability, %{})) do
       {:ok,
        %__MODULE__{
+         contract_version: @contract_version,
          surface_kind: surface_kind,
          transport_options: Keyword.drop(transport_options, @forbidden_transport_option_keys),
          target_id: Keyword.get(attrs, :target_id),
@@ -251,6 +275,20 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
     ]
   end
 
+  @spec to_map(t()) :: projected_t()
+  def to_map(%__MODULE__{} = surface) do
+    %{
+      contract_version: surface.contract_version,
+      surface_kind: surface.surface_kind,
+      transport_options: mapify(surface.transport_options),
+      target_id: surface.target_id,
+      lease_ref: surface.lease_ref,
+      surface_ref: surface.surface_ref,
+      boundary_class: surface.boundary_class,
+      observability: mapify(surface.observability)
+    }
+  end
+
   defp adapter_dispatch(adapter) when is_atom(adapter) do
     %{
       start: &adapter.start/1,
@@ -309,8 +347,16 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
   defp validate_optional_binary(value, _field) when is_binary(value) and value != "", do: :ok
   defp validate_optional_binary(value, field), do: {:error, {:"invalid_#{field}", value}}
 
+  defp validate_contract_version(nil), do: :ok
+  defp validate_contract_version(@contract_version), do: :ok
+  defp validate_contract_version(value), do: {:error, {:invalid_contract_version, value}}
+
   defp validate_boundary_class(nil), do: :ok
   defp validate_boundary_class(boundary_class) when is_atom(boundary_class), do: :ok
+
+  defp validate_boundary_class(boundary_class)
+       when is_binary(boundary_class) and boundary_class != "",
+       do: :ok
 
   defp validate_boundary_class(boundary_class),
     do: {:error, {:invalid_boundary_class, boundary_class}}
@@ -352,6 +398,7 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
   defp normalize_execution_surface(%__MODULE__{} = surface) do
     {:ok,
      [
+       contract_version: surface.contract_version,
        transport_options: surface.transport_options
      ] ++ surface_metadata(surface)}
   end
@@ -367,6 +414,7 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
   defp normalize_execution_surface(attrs) when is_map(attrs) do
     {:ok,
      [
+       contract_version: Map.get(attrs, :contract_version, Map.get(attrs, "contract_version")),
        surface_kind: Map.get(attrs, :surface_kind, Map.get(attrs, "surface_kind")),
        transport_options: Map.get(attrs, :transport_options, Map.get(attrs, "transport_options")),
        target_id: Map.get(attrs, :target_id, Map.get(attrs, "target_id")),
@@ -386,4 +434,19 @@ defmodule ExternalRuntimeTransport.ExecutionSurface do
       {:ok, capabilities}
     end
   end
+
+  defp mapify(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      value
+      |> Enum.into(%{}, fn {key, nested_value} -> {key, mapify(nested_value)} end)
+    else
+      Enum.map(value, &mapify/1)
+    end
+  end
+
+  defp mapify(value) when is_map(value) do
+    Enum.into(value, %{}, fn {key, nested_value} -> {key, mapify(nested_value)} end)
+  end
+
+  defp mapify(value), do: value
 end
