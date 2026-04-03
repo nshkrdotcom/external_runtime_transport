@@ -57,8 +57,14 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
             stderr_buffer: "",
             stderr_framer: %LineFraming{},
             max_buffer_size: nil,
+            oversize_line_chunk_bytes: nil,
+            max_recoverable_line_bytes: nil,
+            oversize_line_mode: :chunk_then_fail,
+            buffer_overflow_mode: :fatal,
+            long_line_spool: nil,
             max_stderr_buffer_size: nil,
             overflowed?: false,
+            fatal_stop_scheduled?: false,
             pending_calls: %{},
             finalize_timer_ref: nil,
             headless_timeout_ms: nil,
@@ -339,7 +345,8 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
         {:stdout, os_pid, chunk},
         %{subprocess: {_pid, os_pid}, stdout_mode: :raw} = state
       ) do
-    {:noreply, append_stdout_chunk(state, IO.iodata_to_binary(chunk))}
+    state = append_stdout_chunk(state, IO.iodata_to_binary(chunk))
+    maybe_stop_after_fatal(state)
   end
 
   @impl GenServer
@@ -350,7 +357,7 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       |> drain_stdout_lines(@default_max_lines_per_batch)
       |> maybe_schedule_drain()
 
-    {:noreply, state}
+    maybe_stop_after_fatal(state)
   end
 
   def handle_info({:stderr, os_pid, chunk}, %{subprocess: {_pid, os_pid}} = state) do
@@ -395,10 +402,14 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       state = flush_stdout_fragment(state)
       state = flush_stderr_fragment(state)
 
-      state =
-        emit_event(state, {:exit, ProcessExit.from_reason(reason, stderr: state.stderr_buffer)})
+      if state.fatal_stop_scheduled? do
+        {:stop, :normal, state}
+      else
+        state =
+          emit_event(state, {:exit, ProcessExit.from_reason(reason, stderr: state.stderr_buffer)})
 
-      {:stop, :normal, %{state | status: :disconnected, subprocess: nil}}
+        {:stop, :normal, %{state | status: :disconnected, subprocess: nil}}
+      end
     else
       Kernel.send(self(), {:finalize_exit, os_pid, pid, reason})
       {:noreply, state}
@@ -424,7 +435,7 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       |> drain_stdout_lines(@default_max_lines_per_batch)
       |> maybe_schedule_drain()
 
-    {:noreply, state}
+    maybe_stop_after_fatal(state)
   end
 
   def handle_info(:headless_timeout, state) do
@@ -445,6 +456,7 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       state
       |> cancel_finalize_timer()
       |> cancel_headless_timer()
+      |> cleanup_long_line_spool()
 
     demonitor_subscribers(state.subscribers)
     cleanup_pending_calls(state.pending_calls)
@@ -473,6 +485,10 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       buffered_events: :queue.new(),
       buffered_event_count: 0,
       max_buffer_size: options.max_buffer_size,
+      oversize_line_chunk_bytes: options.oversize_line_chunk_bytes,
+      max_recoverable_line_bytes: options.max_recoverable_line_bytes,
+      oversize_line_mode: options.oversize_line_mode,
+      buffer_overflow_mode: options.buffer_overflow_mode,
       max_stderr_buffer_size: options.max_stderr_buffer_size,
       max_buffered_events: options.max_buffered_events,
       headless_timeout_ms: options.headless_timeout_ms,
@@ -1309,13 +1325,17 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
     end
   end
 
+  defp append_stdout_data(%{fatal_stop_scheduled?: true} = state, _data), do: state
+
+  defp append_stdout_data(%{long_line_spool: spool} = state, data)
+       when is_map(spool) and is_binary(data) do
+    append_chunked_long_line(state, data)
+  end
+
   defp append_stdout_data(state, data) when is_binary(data) do
     {lines, stdout_framer} = LineFraming.push(state.stdout_framer, data)
 
-    pending_lines =
-      Enum.reduce(lines, state.pending_lines, fn line, queue ->
-        :queue.in(line, queue)
-      end)
+    pending_lines = enqueue_lines(state.pending_lines, lines)
 
     state = %{
       state
@@ -1324,21 +1344,20 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
         overflowed?: false
     }
 
-    if byte_size(stdout_framer.buffer) > state.max_buffer_size do
-      state =
-        emit_event(
-          state,
-          {:error,
-           Error.buffer_overflow(
-             byte_size(stdout_framer.buffer),
-             state.max_buffer_size,
-             preview(stdout_framer.buffer)
-           )}
-        )
+    cond do
+      byte_size(stdout_framer.buffer) <= state.max_buffer_size ->
+        state
 
-      %{state | stdout_framer: LineFraming.new(), overflowed?: true}
-    else
-      state
+      state.oversize_line_mode == :chunk_then_fail ->
+        promote_long_line(state)
+
+      true ->
+        fatal_buffer_overflow(
+          state,
+          byte_size(stdout_framer.buffer),
+          state.max_recoverable_line_bytes || state.max_buffer_size,
+          preview(stdout_framer.buffer)
+        )
     end
   end
 
@@ -1352,16 +1371,7 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
       {{:value, line}, queue} ->
         state = %{state | pending_lines: queue}
 
-        state =
-          if byte_size(line) > state.max_buffer_size do
-            emit_event(
-              state,
-              {:error,
-               Error.buffer_overflow(byte_size(line), state.max_buffer_size, preview(line))}
-            )
-          else
-            emit_event(state, {:message, line})
-          end
+        state = maybe_emit_stdout_line(state, line)
 
         drain_stdout_lines(state, remaining - 1)
     end
@@ -1379,28 +1389,25 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
   end
 
   defp flush_stdout_fragment(%{stdout_framer: %LineFraming{buffer: ""}} = state) do
-    %{state | drain_scheduled?: false}
+    flush_chunked_long_line_fragment(%{state | drain_scheduled?: false})
   end
 
   defp flush_stdout_fragment(state) do
     {[line], stdout_framer} = LineFraming.flush(state.stdout_framer)
 
-    cond do
-      line == "" ->
-        %{state | stdout_framer: stdout_framer, overflowed?: false, drain_scheduled?: false}
+    state = %{
+      state
+      | stdout_framer: stdout_framer,
+        overflowed?: false,
+        drain_scheduled?: false
+    }
 
-      byte_size(line) > state.max_buffer_size ->
-        state =
-          emit_event(
-            state,
-            {:error, Error.buffer_overflow(byte_size(line), state.max_buffer_size, preview(line))}
-          )
-
-        %{state | stdout_framer: stdout_framer, overflowed?: false, drain_scheduled?: false}
-
-      true ->
-        state = emit_event(state, {:message, line})
-        %{state | stdout_framer: stdout_framer, overflowed?: false, drain_scheduled?: false}
+    if line == "" do
+      flush_chunked_long_line_fragment(state)
+    else
+      state
+      |> maybe_emit_stdout_line(line)
+      |> flush_chunked_long_line_fragment()
     end
   end
 
@@ -1555,4 +1562,382 @@ defmodule ExternalRuntimeTransport.Transport.Subprocess do
   defp transport_error({:transport, %Error{}} = error), do: {:error, error}
   defp transport_error(%Error{} = error), do: {:error, {:transport, error}}
   defp transport_error(reason), do: {:error, {:transport, Error.transport_error(reason)}}
+
+  defp maybe_stop_after_fatal(%{fatal_stop_scheduled?: true} = state), do: {:stop, :normal, state}
+  defp maybe_stop_after_fatal(state), do: {:noreply, state}
+
+  defp enqueue_lines(queue, lines) when is_list(lines) do
+    Enum.reduce(lines, queue, fn line, acc -> :queue.in(line, acc) end)
+  end
+
+  defp maybe_emit_stdout_line(state, line) when is_binary(line) do
+    if byte_size(line) > state.max_recoverable_line_bytes do
+      fatal_buffer_overflow(
+        state,
+        byte_size(line),
+        state.max_recoverable_line_bytes,
+        preview(line),
+        %{line_recovery_attempted?: false, bytes_preserved: 0, chunk_count: 0}
+      )
+    else
+      emit_event(state, {:message, line})
+    end
+  end
+
+  defp promote_long_line(%{stdout_framer: %LineFraming{buffer: buffer}} = state)
+       when is_binary(buffer) do
+    case open_long_line_spool() do
+      {:ok, spool} ->
+        case write_long_line_data(spool, buffer, state) do
+          {:ok, spool} ->
+            %{state | stdout_framer: LineFraming.new(), long_line_spool: spool}
+
+          {:error, {:recoverable_ceiling_exceeded, actual_size, spool}} ->
+            fatal_buffer_overflow(
+              %{state | long_line_spool: spool},
+              actual_size,
+              state.max_recoverable_line_bytes,
+              preview(buffer),
+              long_line_context(spool, state, line_recovery_attempted?: true)
+            )
+
+          {:error, {:spool_write_failed, reason, spool}} ->
+            fatal_buffer_overflow(
+              %{state | long_line_spool: spool},
+              spool.bytes,
+              state.max_recoverable_line_bytes,
+              preview(buffer),
+              long_line_context(spool, state,
+                line_recovery_attempted?: true,
+                failure: {:spool_write_failed, reason}
+              )
+            )
+        end
+
+      {:error, reason} ->
+        fatal_buffer_overflow(
+          state,
+          byte_size(buffer),
+          state.max_recoverable_line_bytes,
+          preview(buffer),
+          %{line_recovery_attempted?: true, failure: {:spool_open_failed, reason}}
+        )
+    end
+  end
+
+  defp append_chunked_long_line(%{long_line_spool: spool} = state, data) do
+    data = if spool.pending_cr?, do: "\r" <> data, else: data
+    state = %{state | long_line_spool: %{spool | pending_cr?: false}}
+
+    case split_long_line_data(data) do
+      {:incomplete, payload, pending_cr?} ->
+        handle_incomplete_chunked_long_line(state, payload, pending_cr?)
+
+      {:complete, payload, rest} ->
+        handle_complete_chunked_long_line(state, payload, rest)
+    end
+  end
+
+  defp handle_incomplete_chunked_long_line(
+         %{long_line_spool: spool} = state,
+         payload,
+         pending_cr?
+       ) do
+    case write_long_line_data(spool, payload, state) do
+      {:ok, spool} ->
+        %{state | long_line_spool: %{spool | pending_cr?: pending_cr?}}
+
+      {:error, {:recoverable_ceiling_exceeded, actual_size, spool}} ->
+        long_line_ceiling_exceeded(state, spool, actual_size, payload)
+
+      {:error, {:spool_write_failed, reason, spool}} ->
+        long_line_spool_write_failed(state, spool, payload, reason)
+    end
+  end
+
+  defp handle_complete_chunked_long_line(%{long_line_spool: spool} = state, payload, rest) do
+    case write_long_line_data(spool, payload, state) do
+      {:ok, spool} ->
+        finish_chunked_long_line(state, spool, payload, rest)
+
+      {:error, {:recoverable_ceiling_exceeded, actual_size, spool}} ->
+        long_line_ceiling_exceeded(state, spool, actual_size, payload)
+
+      {:error, {:spool_write_failed, reason, spool}} ->
+        long_line_spool_write_failed(state, spool, payload, reason)
+    end
+  end
+
+  defp finish_chunked_long_line(state, spool, payload, rest) do
+    case finalize_long_line_spool(spool) do
+      {:ok, line} ->
+        state
+        |> Map.put(:long_line_spool, nil)
+        |> maybe_emit_stdout_line(line)
+        |> append_stdout_data(rest)
+
+      {:error, reason} ->
+        long_line_spool_read_failed(state, spool, payload, reason)
+    end
+  end
+
+  defp long_line_ceiling_exceeded(state, spool, actual_size, payload) do
+    fatal_buffer_overflow(
+      %{state | long_line_spool: spool},
+      actual_size,
+      state.max_recoverable_line_bytes,
+      preview(payload),
+      long_line_context(spool, state, line_recovery_attempted?: true)
+    )
+  end
+
+  defp long_line_spool_write_failed(state, spool, payload, reason) do
+    fatal_buffer_overflow(
+      %{state | long_line_spool: spool},
+      max(spool.bytes, 1),
+      state.max_recoverable_line_bytes,
+      preview(payload),
+      long_line_context(spool, state,
+        line_recovery_attempted?: true,
+        failure: {:spool_write_failed, reason}
+      )
+    )
+  end
+
+  defp long_line_spool_read_failed(state, spool, payload, reason) do
+    fatal_buffer_overflow(
+      %{state | long_line_spool: spool},
+      spool.bytes,
+      state.max_recoverable_line_bytes,
+      preview(payload),
+      long_line_context(spool, state,
+        line_recovery_attempted?: true,
+        failure: {:spool_read_failed, reason}
+      )
+    )
+  end
+
+  defp flush_chunked_long_line_fragment(%{long_line_spool: nil} = state), do: state
+
+  defp flush_chunked_long_line_fragment(%{long_line_spool: spool} = state) do
+    case finalize_long_line_spool(spool) do
+      {:ok, line} ->
+        state
+        |> Map.put(:long_line_spool, nil)
+        |> maybe_emit_stdout_line(line)
+
+      {:error, reason} ->
+        fatal_buffer_overflow(
+          %{state | long_line_spool: spool},
+          spool.bytes,
+          state.max_recoverable_line_bytes,
+          preview(spool.preview),
+          long_line_context(spool, state,
+            line_recovery_attempted?: true,
+            failure: {:spool_read_failed, reason}
+          )
+        )
+    end
+  end
+
+  defp fatal_buffer_overflow(state, actual_size, max_size, preview, extra_context \\ %{}) do
+    error =
+      Error.buffer_overflow(
+        actual_size,
+        max_size,
+        preview,
+        long_line_context(state.long_line_spool, state, extra_context)
+      )
+
+    state
+    |> emit_event({:error, error})
+    |> emit_event({:exit, ProcessExit.from_reason(error.reason, stderr: state.stderr_buffer)})
+    |> cleanup_long_line_spool()
+    |> force_stop_subprocess()
+    |> Map.put(:status, :error)
+    |> Map.put(:fatal_stop_scheduled?, true)
+    |> Map.put(:stdout_framer, LineFraming.new())
+    |> Map.put(:pending_lines, :queue.new())
+    |> Map.put(:drain_scheduled?, false)
+    |> Map.put(:overflowed?, false)
+  end
+
+  defp long_line_context(spool, state, extra) when is_list(extra) do
+    long_line_context(spool, state, Enum.into(extra, %{}))
+  end
+
+  defp long_line_context(spool, state, extra) when is_map(extra) do
+    %{
+      mode: state.oversize_line_mode,
+      buffer_overflow_mode: state.buffer_overflow_mode,
+      line_recovery_attempted?: not is_nil(spool),
+      max_recoverable_line_bytes: state.max_recoverable_line_bytes,
+      oversize_line_chunk_bytes: state.oversize_line_chunk_bytes,
+      bytes_preserved: long_line_bytes_preserved(spool),
+      chunk_count: long_line_chunk_count(spool),
+      first_fatal?: true
+    }
+    |> Map.merge(extra)
+  end
+
+  defp long_line_bytes_preserved(%{bytes: bytes}) when is_integer(bytes), do: bytes
+  defp long_line_bytes_preserved(_spool), do: 0
+
+  defp long_line_chunk_count(%{chunk_count: count}) when is_integer(count), do: count
+  defp long_line_chunk_count(_spool), do: 0
+
+  defp open_long_line_spool do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "external_runtime_transport_long_line_#{System.unique_integer([:positive])}.tmp"
+      )
+
+    case File.open(path, [:write, :binary]) do
+      {:ok, io} ->
+        {:ok, %{path: path, io: io, bytes: 0, chunk_count: 0, preview: "", pending_cr?: false}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp write_long_line_data(spool, "", _state), do: {:ok, spool}
+
+  defp write_long_line_data(spool, data, state) when is_binary(data) do
+    do_write_long_line_data(spool, data, state.oversize_line_chunk_bytes, state)
+  end
+
+  defp do_write_long_line_data(spool, "", _chunk_bytes, _state), do: {:ok, spool}
+
+  defp do_write_long_line_data(spool, data, chunk_bytes, state) do
+    size = min(byte_size(data), chunk_bytes)
+    chunk = binary_part(data, 0, size)
+    rest = binary_part(data, size, byte_size(data) - size)
+    next_size = spool.bytes + byte_size(chunk)
+
+    if next_size > state.max_recoverable_line_bytes do
+      {:error, {:recoverable_ceiling_exceeded, next_size, spool}}
+    else
+      case :file.write(spool.io, chunk) do
+        :ok ->
+          spool =
+            %{
+              spool
+              | bytes: next_size,
+                chunk_count: spool.chunk_count + 1,
+                preview: extend_preview(spool.preview, chunk)
+            }
+
+          do_write_long_line_data(spool, rest, chunk_bytes, state)
+
+        {:error, reason} ->
+          {:error, {:spool_write_failed, reason, spool}}
+      end
+    end
+  end
+
+  defp finalize_long_line_spool(spool) do
+    :ok = File.close(spool.io)
+
+    case File.read(spool.path) do
+      {:ok, line} ->
+        _ = File.rm(spool.path)
+        {:ok, line}
+
+      {:error, reason} ->
+        _ = File.rm(spool.path)
+        {:error, reason}
+    end
+  rescue
+    error ->
+      _ = File.rm(spool.path)
+      {:error, error}
+  end
+
+  defp cleanup_long_line_spool(%{long_line_spool: nil} = state), do: state
+
+  defp cleanup_long_line_spool(%{long_line_spool: spool} = state) when is_map(spool) do
+    _ = maybe_close_spool_io(spool)
+    _ = File.rm(spool.path)
+    %{state | long_line_spool: nil}
+  end
+
+  defp maybe_close_spool_io(%{io: io}) when not is_nil(io) do
+    File.close(io)
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_close_spool_io(_spool), do: :ok
+
+  defp split_long_line_data(data) when is_binary(data) do
+    case find_line_boundary(data) do
+      :none ->
+        {payload, pending_cr?} = split_trailing_cr(data)
+        {:incomplete, payload, pending_cr?}
+
+      {:complete, payload, rest} ->
+        {:complete, payload, rest}
+    end
+  end
+
+  defp find_line_boundary(data) when is_binary(data) do
+    do_find_line_boundary(data, 0)
+  end
+
+  defp do_find_line_boundary(data, index) when index >= byte_size(data), do: :none
+
+  defp do_find_line_boundary(data, index) do
+    case :binary.at(data, index) do
+      ?\n ->
+        prefix_end =
+          if index > 0 and :binary.at(data, index - 1) == ?\r, do: index - 1, else: index
+
+        payload = binary_part(data, 0, prefix_end)
+        rest_start = index + 1
+        rest = binary_part(data, rest_start, byte_size(data) - rest_start)
+        {:complete, payload, rest}
+
+      ?\r ->
+        cond do
+          index == byte_size(data) - 1 ->
+            :none
+
+          :binary.at(data, index + 1) == ?\n ->
+            payload = binary_part(data, 0, index)
+            rest_start = index + 2
+            rest = binary_part(data, rest_start, byte_size(data) - rest_start)
+            {:complete, payload, rest}
+
+          true ->
+            payload = binary_part(data, 0, index)
+            rest_start = index + 1
+            rest = binary_part(data, rest_start, byte_size(data) - rest_start)
+            {:complete, payload, rest}
+        end
+
+      _other ->
+        do_find_line_boundary(data, index + 1)
+    end
+  end
+
+  defp split_trailing_cr(""), do: {"", false}
+
+  defp split_trailing_cr(data) do
+    size = byte_size(data)
+
+    if size > 0 and :binary.at(data, size - 1) == ?\r do
+      {binary_part(data, 0, size - 1), true}
+    else
+      {data, false}
+    end
+  end
+
+  defp extend_preview(preview, _chunk) when byte_size(preview) >= 160, do: preview
+
+  defp extend_preview(preview, chunk) do
+    needed = 160 - byte_size(preview)
+    preview <> binary_part(chunk, 0, min(byte_size(chunk), needed))
+  end
 end

@@ -98,15 +98,14 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
              Subprocess.start(
                command: script,
                max_buffer_size: 16,
+               oversize_line_chunk_bytes: 8,
+               max_recoverable_line_bytes: 128,
                buffer_events_until_subscribe?: true
              )
 
     assert :ok = Transport.subscribe(transport, self(), ref)
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:error, %Error{reason: {:buffer_overflow, 64, 16}}}},
-                   2_000
-
+    assert_receive {:external_runtime_transport, ^ref, {:message, ^long_line}}, 2_000
     assert_receive {:external_runtime_transport, ^ref, {:message, "next"}}, 2_000
 
     assert_receive {:external_runtime_transport, ^ref,
@@ -386,13 +385,14 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
                    2_000
   end
 
-  test "oversized stdout emits a structured overflow error and recovers at the next newline" do
+  test "oversized stdout below the recoverable ceiling is chunk-recovered intact" do
     ref = make_ref()
+    long_line = String.duplicate("x", 48)
 
     script =
       create_test_script("""
       python3 - <<'PY'
-      print('x' * 2048)
+      print('x' * 48)
       print('after')
       PY
       """)
@@ -401,15 +401,66 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
              Subprocess.start(
                command: script,
                subscriber: {self(), ref},
-               max_buffer_size: 128
+               max_buffer_size: 16,
+               oversize_line_chunk_bytes: 8,
+               max_recoverable_line_bytes: 64
+             )
+
+    assert_receive {:external_runtime_transport, ^ref, {:message, ^long_line}}, 5_000
+    assert_receive {:external_runtime_transport, ^ref, {:message, "after"}}, 5_000
+
+    assert_receive {:external_runtime_transport, ^ref,
+                    {:exit, %ProcessExit{status: :success, code: 0}}},
+                   5_000
+  end
+
+  test "oversized stdout above the recoverable ceiling emits a fatal structured overflow" do
+    ref = make_ref()
+
+    script =
+      create_test_script("""
+      python3 - <<'PY'
+      import sys
+      import time
+
+      sys.stdout.write('x' * 40)
+      sys.stdout.flush()
+      time.sleep(0.1)
+      sys.stdout.write('x' * 56 + '\\n')
+      sys.stdout.flush()
+      print('after')
+      PY
+      """)
+
+    assert {:ok, transport} =
+             Subprocess.start(
+               command: script,
+               subscriber: {self(), ref},
+               max_buffer_size: 16,
+               oversize_line_chunk_bytes: 8,
+               max_recoverable_line_bytes: 64
              )
 
     assert_receive {:external_runtime_transport, ^ref,
-                    {:error, %Error{reason: {:buffer_overflow, actual_size, 128}}}},
+                    {:error,
+                     %Error{reason: {:buffer_overflow, actual_size, 64}, context: context}}},
                    5_000
 
-    assert actual_size > 128
-    assert_receive {:external_runtime_transport, ^ref, {:message, "after"}}, 5_000
+    assert actual_size > 64
+    assert context.mode == :chunk_then_fail
+    assert context.buffer_overflow_mode == :fatal
+    assert context.line_recovery_attempted? == true
+    assert context.max_recoverable_line_bytes == 64
+    assert context.oversize_line_chunk_bytes == 8
+    assert context.chunk_count > 0
+    assert context.first_fatal? == true
+
+    assert_receive {:external_runtime_transport, ^ref,
+                    {:exit, %ProcessExit{status: :error, reason: {:buffer_overflow, _, 64}}}},
+                   5_000
+
+    refute_receive {:external_runtime_transport, ^ref, {:message, "after"}}, 250
+    assert :disconnected == Subprocess.status(transport)
   end
 
   test "large stdout fragments below the buffer limit are flushed intact on exit" do

@@ -108,3 +108,17 @@ ExecutionSurface.remote_surface?(surface_kind: :ssh_exec)
 ExecutionSurface.path_semantics(surface_kind: :guest_bridge)
 ExecutionSurface.nonlocal_path_surface?(surface_kind: :guest_bridge)
 ```
+## Oversize Stdout And Stderr Frames
+
+The default line-handling posture is now:
+
+- steady-state buffer: `max_buffer_size = 1_048_576`
+- chunk window: `oversize_line_chunk_bytes = 131_072`
+- recoverable line ceiling: `max_recoverable_line_bytes = 16_777_216`
+- hard-failure posture: `oversize_line_mode = :chunk_then_fail`
+
+That default lets the transport recover legitimate multi-megabyte single lines without silently
+dropping bytes, while still treating genuinely unbounded output as a fatal contract violation.
+
+If you raise any of these limits, raise them coherently. `max_recoverable_line_bytes` must stay at
+or above `max_buffer_size`, and the chunk window must stay at or below the recoverable ceiling.

@@ -10,6 +10,10 @@ defmodule ExternalRuntimeTransport.Transport.Options do
   @default_event_tag :external_runtime_transport
   @default_headless_timeout_ms 30_000
   @default_max_buffer_size 1_048_576
+  @default_oversize_line_chunk_bytes 131_072
+  @default_max_recoverable_line_bytes 16_777_216
+  @default_oversize_line_mode :chunk_then_fail
+  @default_buffer_overflow_mode :fatal
   @default_max_stderr_buffer_size 262_144
   @default_max_buffered_events 128
   @default_startup_mode :eager
@@ -50,6 +54,10 @@ defmodule ExternalRuntimeTransport.Transport.Options do
             event_tag: @default_event_tag,
             headless_timeout_ms: @default_headless_timeout_ms,
             max_buffer_size: @default_max_buffer_size,
+            oversize_line_chunk_bytes: @default_oversize_line_chunk_bytes,
+            max_recoverable_line_bytes: @default_max_recoverable_line_bytes,
+            oversize_line_mode: @default_oversize_line_mode,
+            buffer_overflow_mode: @default_buffer_overflow_mode,
             max_stderr_buffer_size: @default_max_stderr_buffer_size,
             max_buffered_events: @default_max_buffered_events,
             stderr_callback: nil,
@@ -90,6 +98,10 @@ defmodule ExternalRuntimeTransport.Transport.Options do
           event_tag: atom(),
           headless_timeout_ms: pos_integer() | :infinity,
           max_buffer_size: pos_integer(),
+          oversize_line_chunk_bytes: pos_integer(),
+          max_recoverable_line_bytes: pos_integer(),
+          oversize_line_mode: :chunk_then_fail,
+          buffer_overflow_mode: :fatal,
           max_stderr_buffer_size: pos_integer(),
           max_buffered_events: pos_integer(),
           stderr_callback: (binary() -> any()) | nil,
@@ -122,6 +134,11 @@ defmodule ExternalRuntimeTransport.Transport.Options do
           | {:invalid_event_tag, term()}
           | {:invalid_headless_timeout_ms, term()}
           | {:invalid_max_buffer_size, term()}
+          | {:invalid_oversize_line_chunk_bytes, term()}
+          | {:invalid_max_recoverable_line_bytes, term()}
+          | {:invalid_oversize_line_mode, term()}
+          | {:invalid_buffer_overflow_mode, term()}
+          | {:invalid_line_recovery_limits, term()}
           | {:invalid_max_stderr_buffer_size, term()}
           | {:invalid_max_buffered_events, term()}
           | {:invalid_stderr_callback, term()}
@@ -156,6 +173,16 @@ defmodule ExternalRuntimeTransport.Transport.Options do
          :ok <- validate_event_tag(normalized.event_tag),
          :ok <- validate_headless_timeout_ms(normalized.headless_timeout_ms),
          :ok <- validate_max_buffer_size(normalized.max_buffer_size),
+         :ok <- validate_oversize_line_chunk_bytes(normalized.oversize_line_chunk_bytes),
+         :ok <- validate_max_recoverable_line_bytes(normalized.max_recoverable_line_bytes),
+         :ok <- validate_oversize_line_mode(normalized.oversize_line_mode),
+         :ok <- validate_buffer_overflow_mode(normalized.buffer_overflow_mode),
+         :ok <-
+           validate_line_recovery_limits(
+             normalized.max_buffer_size,
+             normalized.oversize_line_chunk_bytes,
+             normalized.max_recoverable_line_bytes
+           ),
          :ok <- validate_max_stderr_buffer_size(normalized.max_stderr_buffer_size),
          :ok <- validate_max_buffered_events(normalized.max_buffered_events),
          :ok <- validate_stderr_callback(normalized.stderr_callback),
@@ -217,6 +244,18 @@ defmodule ExternalRuntimeTransport.Transport.Options do
   def default_max_buffer_size, do: @default_max_buffer_size
 
   @doc false
+  def default_oversize_line_chunk_bytes, do: @default_oversize_line_chunk_bytes
+
+  @doc false
+  def default_max_recoverable_line_bytes, do: @default_max_recoverable_line_bytes
+
+  @doc false
+  def default_oversize_line_mode, do: @default_oversize_line_mode
+
+  @doc false
+  def default_buffer_overflow_mode, do: @default_buffer_overflow_mode
+
+  @doc false
   def default_max_stderr_buffer_size, do: @default_max_stderr_buffer_size
 
   defp normalize_invocation(opts) do
@@ -251,6 +290,18 @@ defmodule ExternalRuntimeTransport.Transport.Options do
            headless_timeout_ms:
              Keyword.get(opts, :headless_timeout_ms, @default_headless_timeout_ms),
            max_buffer_size: Keyword.get(opts, :max_buffer_size, @default_max_buffer_size),
+           oversize_line_chunk_bytes:
+             Keyword.get(opts, :oversize_line_chunk_bytes, @default_oversize_line_chunk_bytes),
+           max_recoverable_line_bytes:
+             Keyword.get(
+               opts,
+               :max_recoverable_line_bytes,
+               @default_max_recoverable_line_bytes
+             ),
+           oversize_line_mode:
+             Keyword.get(opts, :oversize_line_mode, @default_oversize_line_mode),
+           buffer_overflow_mode:
+             Keyword.get(opts, :buffer_overflow_mode, @default_buffer_overflow_mode),
            max_stderr_buffer_size:
              Keyword.get(opts, :max_stderr_buffer_size, @default_max_stderr_buffer_size),
            max_buffered_events:
@@ -290,6 +341,18 @@ defmodule ExternalRuntimeTransport.Transport.Options do
            headless_timeout_ms:
              Keyword.get(opts, :headless_timeout_ms, @default_headless_timeout_ms),
            max_buffer_size: Keyword.get(opts, :max_buffer_size, @default_max_buffer_size),
+           oversize_line_chunk_bytes:
+             Keyword.get(opts, :oversize_line_chunk_bytes, @default_oversize_line_chunk_bytes),
+           max_recoverable_line_bytes:
+             Keyword.get(
+               opts,
+               :max_recoverable_line_bytes,
+               @default_max_recoverable_line_bytes
+             ),
+           oversize_line_mode:
+             Keyword.get(opts, :oversize_line_mode, @default_oversize_line_mode),
+           buffer_overflow_mode:
+             Keyword.get(opts, :buffer_overflow_mode, @default_buffer_overflow_mode),
            max_stderr_buffer_size:
              Keyword.get(opts, :max_stderr_buffer_size, @default_max_stderr_buffer_size),
            max_buffered_events:
@@ -427,6 +490,43 @@ defmodule ExternalRuntimeTransport.Transport.Options do
 
   defp validate_max_buffer_size(size) when is_integer(size) and size > 0, do: :ok
   defp validate_max_buffer_size(size), do: {:error, {:invalid_max_buffer_size, size}}
+
+  defp validate_oversize_line_chunk_bytes(size) when is_integer(size) and size > 0, do: :ok
+
+  defp validate_oversize_line_chunk_bytes(size),
+    do: {:error, {:invalid_oversize_line_chunk_bytes, size}}
+
+  defp validate_max_recoverable_line_bytes(size) when is_integer(size) and size > 0, do: :ok
+
+  defp validate_max_recoverable_line_bytes(size),
+    do: {:error, {:invalid_max_recoverable_line_bytes, size}}
+
+  defp validate_oversize_line_mode(:chunk_then_fail), do: :ok
+  defp validate_oversize_line_mode(mode), do: {:error, {:invalid_oversize_line_mode, mode}}
+
+  defp validate_buffer_overflow_mode(:fatal), do: :ok
+
+  defp validate_buffer_overflow_mode(mode),
+    do: {:error, {:invalid_buffer_overflow_mode, mode}}
+
+  defp validate_line_recovery_limits(max_buffer_size, chunk_bytes, max_recoverable_line_bytes) do
+    cond do
+      max_recoverable_line_bytes < max_buffer_size ->
+        {:error,
+         {:invalid_line_recovery_limits,
+          {:max_recoverable_line_bytes_lt_max_buffer_size, max_recoverable_line_bytes,
+           max_buffer_size}}}
+
+      chunk_bytes > max_recoverable_line_bytes ->
+        {:error,
+         {:invalid_line_recovery_limits,
+          {:oversize_line_chunk_bytes_gt_max_recoverable_line_bytes, chunk_bytes,
+           max_recoverable_line_bytes}}}
+
+      true ->
+        :ok
+    end
+  end
 
   defp validate_max_stderr_buffer_size(size) when is_integer(size) and size > 0, do: :ok
 

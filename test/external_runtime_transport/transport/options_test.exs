@@ -33,6 +33,10 @@ defmodule ExternalRuntimeTransport.Transport.OptionsTest do
                event_tag: :custom_transport,
                headless_timeout_ms: :infinity,
                max_buffer_size: 8_192,
+               oversize_line_chunk_bytes: 1_024,
+               max_recoverable_line_bytes: 65_536,
+               oversize_line_mode: :chunk_then_fail,
+               buffer_overflow_mode: :fatal,
                max_stderr_buffer_size: 4_096,
                max_buffered_events: 16,
                buffer_events_until_subscribe?: true,
@@ -43,6 +47,10 @@ defmodule ExternalRuntimeTransport.Transport.OptionsTest do
     assert options.event_tag == :custom_transport
     assert options.headless_timeout_ms == :infinity
     assert options.max_buffer_size == 8_192
+    assert options.oversize_line_chunk_bytes == 1_024
+    assert options.max_recoverable_line_bytes == 65_536
+    assert options.oversize_line_mode == :chunk_then_fail
+    assert options.buffer_overflow_mode == :fatal
     assert options.max_stderr_buffer_size == 4_096
     assert options.max_buffered_events == 16
     assert options.buffer_events_until_subscribe? == true
@@ -109,6 +117,35 @@ defmodule ExternalRuntimeTransport.Transport.OptionsTest do
 
     assert {:error, {:invalid_transport_options, {:invalid_interrupt_mode, {:stdin, :bad}}}} =
              Options.new(command: "cat", interrupt_mode: {:stdin, :bad})
+
+    assert {:error, {:invalid_transport_options, {:invalid_oversize_line_chunk_bytes, 0}}} =
+             Options.new(command: "cat", oversize_line_chunk_bytes: 0)
+
+    assert {:error, {:invalid_transport_options, {:invalid_max_recoverable_line_bytes, 0}}} =
+             Options.new(command: "cat", max_recoverable_line_bytes: 0)
+
+    assert {:error, {:invalid_transport_options, {:invalid_oversize_line_mode, :recover}}} =
+             Options.new(command: "cat", oversize_line_mode: :recover)
+
+    assert {:error, {:invalid_transport_options, {:invalid_buffer_overflow_mode, :warn}}} =
+             Options.new(command: "cat", buffer_overflow_mode: :warn)
+
+    assert {:error,
+            {:invalid_transport_options,
+             {:invalid_line_recovery_limits,
+              {:max_recoverable_line_bytes_lt_max_buffer_size, 16, 32}}}} =
+             Options.new(command: "cat", max_buffer_size: 32, max_recoverable_line_bytes: 16)
+
+    assert {:error,
+            {:invalid_transport_options,
+             {:invalid_line_recovery_limits,
+              {:oversize_line_chunk_bytes_gt_max_recoverable_line_bytes, 64, 32}}}} =
+             Options.new(
+               command: "cat",
+               max_buffer_size: 16,
+               oversize_line_chunk_bytes: 64,
+               max_recoverable_line_bytes: 32
+             )
 
     assert {:error, {:invalid_transport_options, {:invalid_max_buffered_events, 0}}} =
              Options.new(command: "cat", max_buffered_events: 0)

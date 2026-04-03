@@ -38,13 +38,19 @@ defmodule ExternalRuntimeTransport.Transport.Error do
   @doc """
   Builds a buffer overflow error with preview metadata.
   """
-  @spec buffer_overflow(pos_integer(), pos_integer(), binary()) :: t()
-  def buffer_overflow(actual_size, max_size, preview) do
-    transport_error({:buffer_overflow, actual_size, max_size}, %{
-      actual_size: actual_size,
-      max_size: max_size,
-      preview: preview
-    })
+  @spec buffer_overflow(pos_integer(), pos_integer(), binary(), map()) :: t()
+  def buffer_overflow(actual_size, max_size, preview, context \\ %{}) when is_map(context) do
+    transport_error(
+      {:buffer_overflow, actual_size, max_size},
+      Map.merge(
+        %{
+          actual_size: actual_size,
+          max_size: max_size,
+          preview: preview
+        },
+        context
+      )
+    )
   end
 
   @doc """

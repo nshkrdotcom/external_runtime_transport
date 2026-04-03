@@ -135,3 +135,20 @@ higher layer needs to reason about the surface generically.
 Published HexDocs:
 
 <https://hexdocs.pm/external_runtime_transport>
+## Oversize Line Recovery
+
+The transport now treats oversized stdout lines as a bounded recovery problem instead of an
+unbounded buffer-growth bug.
+
+- `max_buffer_size` remains the steady-state in-memory line buffer and defaults to `1_048_576`
+  bytes.
+- `oversize_line_chunk_bytes` defaults to `131_072` bytes and is used to incrementally recover a
+  large line without letting the framer grow without bound.
+- `max_recoverable_line_bytes` defaults to `16_777_216` bytes and is the hard ceiling for a single
+  recoverable line.
+- `oversize_line_mode` is now `:chunk_then_fail` and `buffer_overflow_mode` is intentionally
+  `:fatal`.
+
+The operational rule is simple: recover the full line while it remains within the configured
+ceiling, then fail fast with a structured `buffer_overflow` error once the data-loss boundary is
+crossed. The transport no longer pretends that silently dropped bytes are a healthy recovery path.
