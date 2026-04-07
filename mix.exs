@@ -60,8 +60,6 @@ defmodule ExternalRuntimeTransport.MixProject do
       maintainers: ["nshkrdotcom"],
       files: [
         "lib",
-        "guides",
-        "examples",
         "assets/*.svg",
         "CHANGELOG.md",
         "LICENSE",
