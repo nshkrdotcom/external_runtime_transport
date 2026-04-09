@@ -10,44 +10,38 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-111111.svg" alt="MIT License" /></a>
 </p>
 
-`external_runtime_transport` is the shared execution-surface substrate for the
-Jido runtime stack. It owns the generic `execution_surface` contract, adapter
-registry, transport facade, and the built-in `:local_subprocess`,
-`:ssh_exec`, and `:guest_bridge` families.
+`external_runtime_transport` is a deprecation shell for the parts of the lower
+runtime substrate that moved into Execution Plane during Wave 2.
 
-The package is intentionally transport-focused. Provider planning, session
-parsing, approval policy, workspace policy, and other application concerns stay
-in downstream repos such as `cli_subprocess_core`.
+Execution Plane now owns the execution_surface contract and the minimal local one-shot process substrate for the Brain / Spine / Execution Plane architecture.
+This repo remains in place for compatibility with already-published APIs and for
+the still-active SSH, guest-bridge, and long-lived transport mechanics that are
+retired in later waves.
 
-## What This Package Owns
+New lower-runtime adoption should start in `/home/home/p/g/n/execution_plane`,
+not here.
 
-- `ExternalRuntimeTransport.ExecutionSurface` defines the public placement seam.
-- `ExternalRuntimeTransport.Transport` is the generic run/start facade.
-- `ExternalRuntimeTransport.ExecutionSurface.Adapter` and the internal registry
-  own built-in adapter dispatch.
-- the built-in local subprocess, SSH exec, and guest bridge adapters implement
-  the landed transport families.
-- `ExternalRuntimeTransport.Transport.Options`,
-  `ExternalRuntimeTransport.Transport.RunOptions`,
-  `ExternalRuntimeTransport.Transport.RunResult`, and
-  `ExternalRuntimeTransport.Transport.Info` own normalized transport contracts.
-- `ExternalRuntimeTransport.Command`, `ExternalRuntimeTransport.ProcessExit`,
-  `ExternalRuntimeTransport.LineFraming`, and `ExternalRuntimeTransport.TaskSupport`
-  support the substrate itself.
+## What This Package Still Owns
+
+- the legacy `ExternalRuntimeTransport.Transport` facade for existing callers
+- SSH exec and guest-bridge transport implementations that are still active in this repo
+- long-lived subprocess streaming and subscriber-delivery mechanics that later waves retire
+- historical compatibility docs for callers that have not yet adopted `execution_plane`
+
+The `ExternalRuntimeTransport.ExecutionSurface`, `Command`, `ProcessExit`, and
+local one-shot `Transport.run/2` vocabulary are now legacy compatibility
+surfaces. They remain callable here, but they are no longer the architecture
+owner for the covered minimal substrate slice.
 
 ## Installation
 
-```elixir
-def deps do
-  [
-    {:external_runtime_transport, "~> 0.1.0"}
-  ]
-end
-```
+Existing integrations can keep this dependency during migration. New lower
+execution-plane work should depend on `execution_plane` instead.
 
 ## Quick Start
 
-Run a local command through the generic facade:
+Run a local command through the generic facade only when you are staying on the
+legacy compatibility surface:
 
 ```elixir
 alias ExternalRuntimeTransport.Command
@@ -95,8 +89,9 @@ ref = make_ref()
 
 ## Execution Surface
 
-The public placement contract is one `execution_surface` value with these
-fields:
+Execution Plane now owns the authoritative `execution_surface` contract. This
+repo keeps the historical shape below so existing callers do not break during
+the wave:
 
 - `contract_version`
 - `surface_kind`
@@ -107,9 +102,9 @@ fields:
 - `boundary_class`
 - `observability`
 
-The contract does not expose adapter module names. Callers choose placement by
-describing the surface, and the substrate resolves the built-in adapter
-internally.
+The contract still does not expose adapter module names. Callers choose
+placement by describing the surface, and the substrate resolves the built-in
+adapter internally.
 
 Use `ExternalRuntimeTransport.ExecutionSurface.to_map/1` when you need the
 versioned map projection for JSON-safe boundaries.
@@ -126,8 +121,8 @@ higher layer needs to reason about the surface generically.
 
 ## Documentation
 
-- `guides/getting-started.md` covers the public facade.
-- `guides/execution-surface-contract.md` defines the stable placement seam.
+- `guides/getting-started.md` explains the legacy facade and points new adoption to Execution Plane.
+- `guides/execution-surface-contract.md` records the legacy placement seam now owned by Execution Plane.
 - `guides/guest-bridge-contract.md` covers the attach contract for
   `:guest_bridge`.
 - `examples/README.md` points at runnable placement examples.

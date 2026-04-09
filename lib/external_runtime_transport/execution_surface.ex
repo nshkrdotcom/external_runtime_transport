@@ -1,6 +1,10 @@
 defmodule ExternalRuntimeTransport.ExecutionSurface do
   @moduledoc """
-  Public execution-surface contract for process placement and transport routing.
+  Legacy compatibility shell for the public execution-surface contract.
+
+  Execution Plane now owns the `execution_surface` contract. This module keeps
+  the historical public shape so existing callers can continue to reason about
+  narrow placement without leaking command or provider semantics.
 
   This contract is intentionally narrow:
 

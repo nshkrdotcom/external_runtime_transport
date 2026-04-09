@@ -44,7 +44,7 @@ defmodule ExternalRuntimeTransport.MixProject do
   end
 
   defp description do
-    "Shared execution-surface substrate for local subprocess, SSH exec, and guest-bridge placement."
+    "Legacy compatibility and deprecation shell after Execution Plane took ownership of the moved minimal substrate slice."
   end
 
   defp package do

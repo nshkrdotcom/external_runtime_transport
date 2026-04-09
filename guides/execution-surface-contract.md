@@ -1,7 +1,10 @@
 # Execution Surface Contract
 
-`ExternalRuntimeTransport.ExecutionSurface` is the stable placement seam shared
-across the runtime stack.
+Execution Plane now owns the stable `execution_surface` contract for the lower
+runtime substrate.
+
+`ExternalRuntimeTransport.ExecutionSurface` remains as a legacy compatibility
+shell that preserves the historical public shape for existing callers.
 
 ## Fields
 
@@ -44,8 +47,9 @@ The landed built-in kinds are:
 - `:ssh_exec`
 - `:guest_bridge`
 
-The registry is package-owned. Public callers choose among the landed kinds but
-do not register adapters directly.
+Execution Plane is now the architecture owner of this vocabulary. Public
+callers still choose among the landed kinds here, but this repo no longer owns
+the contract boundary for the moved minimal slice.
 
 ## Capability Vocabulary
 

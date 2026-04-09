@@ -1,10 +1,12 @@
 defmodule ExternalRuntimeTransport do
   @moduledoc """
-  Shared execution-surface substrate for process placement.
+  Legacy compatibility and deprecation shell for the lower runtime substrate
+  that moved to Execution Plane in Wave 2.
 
-  The package owns the generic `execution_surface` contract plus the raw
-  transport adapters that currently land as `:local_subprocess`, `:ssh_exec`,
-  and `:guest_bridge`.
+  `execution_plane` now owns the `execution_surface` contract and the minimal
+  local one-shot process substrate. This repo remains for published facade
+  compatibility and for the SSH, guest, and long-lived transport mechanics that
+  retire in later waves.
   """
 
   @doc """

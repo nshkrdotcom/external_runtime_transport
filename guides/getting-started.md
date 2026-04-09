@@ -1,7 +1,16 @@
 # Getting Started
 
-`external_runtime_transport` gives downstream runtimes one place to express
-process placement without leaking adapter module names into public APIs.
+`external_runtime_transport` is now the legacy compatibility entrypoint for
+callers that still depend on its published APIs.
+
+Execution Plane owns the moved minimal substrate in Wave 2:
+
+- the `execution_surface` contract
+- the minimal local one-shot process substrate
+
+Use `/home/home/p/g/n/execution_plane` for new lower-runtime adoption. Keep
+this repo only when you still need the historical facade or the not-yet-retired
+SSH, guest, or long-lived transport mechanics.
 
 ## Install
 
@@ -15,8 +24,8 @@ end
 
 ## One-Shot Commands
 
-Use `ExternalRuntimeTransport.Transport.run/2` with a normalized
-`ExternalRuntimeTransport.Command`:
+Use `ExternalRuntimeTransport.Transport.run/2` only when you need the legacy
+compatibility surface:
 
 ```elixir
 alias ExternalRuntimeTransport.Command
@@ -75,7 +84,8 @@ Tagged subscribers receive:
 
 ## Public Placement Seam
 
-Every public placement call stays on one `execution_surface` seam. It carries:
+Execution Plane is now the architecture owner of this placement seam. The shell
+here preserves the same historical shape:
 
 - `contract_version`
 - `surface_kind`
