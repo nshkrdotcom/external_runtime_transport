@@ -11,32 +11,36 @@
 </p>
 
 `external_runtime_transport` is a deprecation shell for the parts of the lower
-runtime substrate that moved into Execution Plane during Wave 2.
+runtime substrate that moved into Execution Plane during Waves 2, 6, and 7.
 
-Execution Plane now owns the execution_surface contract and the minimal local one-shot process substrate for the Brain / Spine / Execution Plane architecture.
-This repo remains in place for compatibility with already-published APIs and for
-the still-active SSH, guest-bridge, and long-lived transport mechanics that are
-retired in later waves.
+Execution Plane now owns the execution_surface contract, the minimal local
+one-shot process substrate, the long-lived transport substrate, and the active
+local, SSH, and guest placement implementations for the Brain / Spine /
+Execution Plane architecture. This repo remains in place only for
+compatibility with already-published APIs.
+
+That includes the minimal local one-shot process substrate that Wave 2 moved
+out of this repo.
 
 New lower-runtime adoption should start in `/home/home/p/g/n/execution_plane`,
 not here.
 
-## What This Package Still Owns
+## What This Package Still Provides
 
 - the legacy `ExternalRuntimeTransport.Transport` facade for existing callers
-- SSH exec and guest-bridge transport implementations that are still active in this repo
-- long-lived subprocess streaming and subscriber-delivery mechanics that later waves retire
+- compatibility structs and helper functions that map onto Execution Plane
+- compatibility docs for callers that have not yet moved to `execution_plane`
 - historical compatibility docs for callers that have not yet adopted `execution_plane`
 
 The `ExternalRuntimeTransport.ExecutionSurface`, `Command`, `ProcessExit`, and
 local one-shot `Transport.run/2` vocabulary are now legacy compatibility
 surfaces. They remain callable here, but they are no longer the architecture
-owner for the covered minimal substrate slice.
+owner for any active lower-runtime slice.
 
 ## Installation
 
 Existing integrations can keep this dependency during migration. New lower
-execution-plane work should depend on `execution_plane` instead.
+runtime work should depend on `execution_plane` instead.
 
 ## Quick Start
 
@@ -90,8 +94,8 @@ ref = make_ref()
 ## Execution Surface
 
 Execution Plane now owns the authoritative `execution_surface` contract. This
-repo keeps the historical shape below so existing callers do not break during
-the wave:
+repo keeps the historical shape below so existing callers do not break while
+they migrate:
 
 - `contract_version`
 - `surface_kind`
@@ -119,10 +123,15 @@ Use `ExternalRuntimeTransport.ExecutionSurface.capabilities/1`,
 `path_semantics/1`, `remote_surface?/1`, and `nonlocal_path_surface?/1` when a
 higher layer needs to reason about the surface generically.
 
+Those values are compatibility projections over the lower Execution Plane
+surface. They do not imply this repo still owns the active placement logic.
+
 ## Documentation
 
-- `guides/getting-started.md` explains the legacy facade and points new adoption to Execution Plane.
-- `guides/execution-surface-contract.md` records the legacy placement seam now owned by Execution Plane.
+- `guides/getting-started.md` explains the archival compatibility facade and
+  points new adoption to Execution Plane.
+- `guides/execution-surface-contract.md` records the legacy placement seam now
+  owned by Execution Plane.
 - `guides/guest-bridge-contract.md` covers the attach contract for
   `:guest_bridge`.
 - `examples/README.md` points at runnable placement examples.

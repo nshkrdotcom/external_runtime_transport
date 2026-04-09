@@ -3,14 +3,15 @@
 `external_runtime_transport` is now the legacy compatibility entrypoint for
 callers that still depend on its published APIs.
 
-Execution Plane owns the moved minimal substrate in Wave 2:
+Execution Plane owns the moved lower substrate after Waves 2, 6, and 7:
 
 - the `execution_surface` contract
-- the minimal local one-shot process substrate
+- the one-shot process substrate
+- the long-lived process transport substrate
+- the active local, SSH, and guest placement implementations
 
 Use `/home/home/p/g/n/execution_plane` for new lower-runtime adoption. Keep
-this repo only when you still need the historical facade or the not-yet-retired
-SSH, guest, or long-lived transport mechanics.
+this repo only when you still need the historical published facade.
 
 ## Install
 
@@ -106,6 +107,9 @@ Built-in surfaces today are:
 - `:local_subprocess`
 - `:ssh_exec`
 - `:guest_bridge`
+
+They remain callable here as compatibility vocabulary, but the active owner is
+`execution_plane`.
 
 ## Capability Helpers
 

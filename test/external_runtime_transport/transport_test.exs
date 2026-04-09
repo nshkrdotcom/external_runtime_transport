@@ -37,10 +37,7 @@ defmodule ExternalRuntimeTransport.TransportTest do
     assert :ok = Transport.end_input(transport)
 
     assert_receive {:external_runtime_transport, ^ref, {:data, "alpha"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
   end
 
   test "start treats guest bridge as a real transport family" do
@@ -89,5 +86,11 @@ defmodule ExternalRuntimeTransport.TransportTest do
     end)
 
     path
+  end
+
+  defp assert_tagged_event(ref, timeout \\ 2_000) do
+    assert_receive message, timeout
+    assert {:ok, event} = Transport.extract_event(message, ref)
+    event
   end
 end

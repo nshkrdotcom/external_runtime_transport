@@ -1,42 +1,25 @@
 defmodule ExternalRuntimeTransport.Transport do
   @moduledoc """
-  Behaviour for the raw subprocess transport layer.
-
-  In addition to the long-lived subscriber-driven transport API, the transport
-  layer also owns synchronous non-PTY command execution through `run/2`.
-
-  Legacy subscribers receive bare transport tuples:
-
-  - `{:transport_message, line}`
-  - `{:transport_data, chunk}`
-  - `{:transport_error, %ExternalRuntimeTransport.Transport.Error{}}`
-  - `{:transport_stderr, chunk}`
-  - `{:transport_exit, %ExternalRuntimeTransport.ProcessExit{}}`
-
-  Tagged subscribers receive:
-
-  - `{event_tag, ref, {:message, line}}`
-  - `{event_tag, ref, {:data, chunk}}`
-  - `{event_tag, ref, {:error, %ExternalRuntimeTransport.Transport.Error{}}}`
-  - `{event_tag, ref, {:stderr, chunk}}`
-  - `{event_tag, ref, {:exit, %ExternalRuntimeTransport.ProcessExit{}}}`
-
-  When `:replay_stderr_on_subscribe?` is enabled at startup, newly attached
-  subscribers also receive the retained stderr tail immediately after
-  subscription. When `:buffer_events_until_subscribe?` is enabled, stdout,
-  stderr, and error events emitted before the first subscriber attaches are
-  replayed in order.
+  Legacy compatibility facade above the Execution Plane-owned long-lived process
+  transport substrate.
   """
 
-  alias ExternalRuntimeTransport.{Command, ProcessExit, TaskSupport, Transport.Error}
-  alias ExternalRuntimeTransport.ExecutionSurface
-  alias ExternalRuntimeTransport.ExecutionSurface.Capabilities
-  alias ExternalRuntimeTransport.Transport.Delivery
-  alias ExternalRuntimeTransport.Transport.Info
-  alias ExternalRuntimeTransport.Transport.RunResult
+  alias ExecutionPlane.Process.Transport, as: RuntimeTransport
+  alias ExecutionPlane.Process.Transport.Delivery
+  alias ExecutionPlane.Process.Transport.Error, as: RuntimeError
+  alias ExecutionPlane.Process.Transport.Info, as: RuntimeInfo
+  alias ExecutionPlane.Process.Transport.RunResult, as: RuntimeRunResult
 
-  @default_call_timeout_ms 5_000
-  @default_force_close_timeout_ms 5_000
+  alias ExternalRuntimeTransport.{
+    Command,
+    ProcessExit,
+    Transport.Error,
+    Transport.Info,
+    Transport.RunResult
+  }
+
+  alias ExternalRuntimeTransport.ExecutionSurface.Capabilities
+  alias ExternalRuntimeTransport.Transport.Delivery, as: LegacyDelivery
 
   @typedoc "Opaque transport reference."
   @type t :: pid()
@@ -88,368 +71,227 @@ defmodule ExternalRuntimeTransport.Transport do
   @callback stderr(t()) :: binary()
   @callback info(t()) :: Info.t()
 
-  @doc """
-  Starts the default raw transport implementation.
-  """
   @spec start(keyword()) :: {:ok, t()} | {:error, {:transport, Error.t()}}
   def start(opts) when is_list(opts) do
-    case ExecutionSurface.resolve(opts) do
-      {:ok, %{dispatch: dispatch, adapter_options: adapter_options} = resolved} ->
-        with :ok <- validate_start_capabilities(resolved, opts) do
-          dispatch.start.(adapter_options)
-        end
-
-      {:error, reason} ->
-        transport_error(reason)
-    end
+    opts
+    |> normalize_opts()
+    |> RuntimeTransport.start()
+    |> normalize_transport_result()
   end
 
-  @doc """
-  Starts the default raw transport implementation and links it to the caller.
-  """
   @spec start_link(keyword()) :: {:ok, t()} | {:error, {:transport, Error.t()}}
   def start_link(opts) when is_list(opts) do
-    case ExecutionSurface.resolve(opts) do
-      {:ok, %{dispatch: dispatch, adapter_options: adapter_options} = resolved} ->
-        with :ok <- validate_start_capabilities(resolved, opts) do
-          dispatch.start_link.(adapter_options)
-        end
-
-      {:error, reason} ->
-        transport_error(reason)
-    end
+    opts
+    |> normalize_opts()
+    |> RuntimeTransport.start_link()
+    |> normalize_transport_result()
   end
 
-  @doc """
-  Runs a one-shot non-PTY command and captures exact stdout, stderr, and exit
-  data.
-  """
   @spec run(Command.t(), keyword()) :: {:ok, RunResult.t()} | {:error, {:transport, Error.t()}}
   def run(%Command{} = command, opts \\ []) when is_list(opts) do
-    case ExecutionSurface.resolve(opts) do
-      {:ok, %{dispatch: dispatch, adapter_options: adapter_options} = resolved} ->
-        with :ok <- validate_run_capabilities(resolved, command) do
-          dispatch.run.(command, adapter_options)
-        end
-
-      {:error, reason} ->
-        transport_error(reason)
-    end
+    command
+    |> to_runtime_command()
+    |> RuntimeTransport.run(normalize_opts(opts))
+    |> normalize_run_result()
   end
 
-  @doc """
-  Sends data to the subprocess stdin.
-  """
   @spec send(t(), iodata() | map() | list()) :: :ok | {:error, {:transport, Error.t()}}
-  def send(transport, message) when is_pid(transport) do
-    case safe_call(transport, {:send, message}) do
-      {:ok, result} -> result
-      {:error, reason} -> transport_error(reason)
-    end
-  end
+  def send(transport, message) when is_pid(transport),
+    do: normalize_transport_result(RuntimeTransport.send(transport, message))
 
-  @doc """
-  Subscribes the caller in legacy mode.
-  """
   @spec subscribe(t(), pid()) :: :ok | {:error, {:transport, Error.t()}}
-  def subscribe(transport, pid) when is_pid(transport) and is_pid(pid) do
-    subscribe(transport, pid, :legacy)
-  end
+  def subscribe(transport, pid) when is_pid(transport) and is_pid(pid),
+    do: normalize_transport_result(RuntimeTransport.subscribe(transport, pid))
 
-  @doc """
-  Subscribes a process with an explicit tag mode.
-  """
   @spec subscribe(t(), pid(), subscription_tag()) :: :ok | {:error, {:transport, Error.t()}}
   def subscribe(transport, pid, tag)
-      when is_pid(transport) and is_pid(pid) and (tag == :legacy or is_reference(tag)) do
-    case safe_call(transport, {:subscribe, pid, tag}) do
-      {:ok, result} -> result
-      {:error, reason} -> transport_error(reason)
-    end
-  end
+      when is_pid(transport) and is_pid(pid) and (tag == :legacy or is_reference(tag)),
+      do: normalize_transport_result(RuntimeTransport.subscribe(transport, pid, tag))
 
   def subscribe(_transport, _pid, tag) do
-    transport_error(Error.invalid_options({:invalid_subscriber, tag}))
+    {:error, {:transport, Error.invalid_options({:invalid_subscriber, tag})}}
   end
 
-  @doc """
-  Removes a subscriber.
-  """
   @spec unsubscribe(t(), pid()) :: :ok
-  def unsubscribe(transport, pid) when is_pid(transport) and is_pid(pid) do
-    case safe_call(transport, {:unsubscribe, pid}) do
-      {:ok, :ok} -> :ok
-      {:error, _reason} -> :ok
-    end
-  end
+  def unsubscribe(transport, pid) when is_pid(transport) and is_pid(pid),
+    do: RuntimeTransport.unsubscribe(transport, pid)
 
-  @doc """
-  Stops the transport.
-  """
   @spec close(t()) :: :ok
-  def close(transport) when is_pid(transport) do
-    GenServer.stop(transport, :normal)
-  catch
-    :exit, {:noproc, _} -> :ok
-    :exit, :noproc -> :ok
-  end
+  def close(transport) when is_pid(transport), do: RuntimeTransport.close(transport)
 
-  @doc """
-  Forces the subprocess down immediately.
-  """
   @spec force_close(t()) :: :ok | {:error, {:transport, Error.t()}}
-  def force_close(transport) when is_pid(transport) do
-    do_force_close(transport, @default_force_close_timeout_ms)
-  end
+  def force_close(transport) when is_pid(transport),
+    do: normalize_transport_result(RuntimeTransport.force_close(transport))
 
-  @doc """
-  Sends SIGINT to the subprocess.
-  """
   @spec interrupt(t()) :: :ok | {:error, {:transport, Error.t()}}
-  def interrupt(transport) when is_pid(transport) do
-    case safe_call(transport, :interrupt) do
-      {:ok, result} ->
-        normalize_call_result(result)
+  def interrupt(transport) when is_pid(transport),
+    do: normalize_transport_result(RuntimeTransport.interrupt(transport))
 
-      {:error, reason} ->
-        transport_error(reason)
-    end
-  end
-
-  @doc """
-  Returns transport connectivity status.
-  """
   @spec status(t()) :: :connected | :disconnected | :error
-  def status(transport) when is_pid(transport) do
-    case safe_call(transport, :status) do
-      {:ok, status} when status in [:connected, :disconnected, :error] -> status
-      {:ok, _other} -> :error
-      {:error, _reason} -> :disconnected
-    end
-  end
+  def status(transport) when is_pid(transport), do: RuntimeTransport.status(transport)
 
-  @doc """
-  Closes stdin for EOF-driven CLIs.
-
-  Pipe-backed transports send `:eof`; PTY-backed transports send the terminal
-  EOF byte (`Ctrl-D`).
-  """
   @spec end_input(t()) :: :ok | {:error, {:transport, Error.t()}}
-  def end_input(transport) when is_pid(transport) do
-    case safe_call(transport, :end_input) do
-      {:ok, result} -> result
-      {:error, reason} -> transport_error(reason)
-    end
-  end
+  def end_input(transport) when is_pid(transport),
+    do: normalize_transport_result(RuntimeTransport.end_input(transport))
 
-  @doc """
-  Returns the stderr ring buffer tail.
-  """
   @spec stderr(t()) :: binary()
-  def stderr(transport) when is_pid(transport) do
-    case safe_call(transport, :stderr) do
-      {:ok, data} when is_binary(data) -> data
-      _ -> ""
-    end
-  end
+  def stderr(transport) when is_pid(transport), do: RuntimeTransport.stderr(transport)
 
-  @doc """
-  Returns the current transport metadata snapshot.
-  """
   @spec info(t()) :: Info.t()
   def info(transport) when is_pid(transport) do
-    case safe_call(transport, :info) do
-      {:ok, %Info{} = info} -> info
-      _other -> Info.disconnected()
-    end
+    transport
+    |> RuntimeTransport.info()
+    |> to_legacy_info()
   end
 
-  defp validate_start_capabilities(
-         %{adapter_capabilities: %Capabilities{} = capabilities, surface: surface},
-         opts
-       )
-       when is_list(opts) do
-    [
-      {capabilities.supports_streaming_stdio?, :streaming_stdio},
-      {not Keyword.get(opts, :pty?, false) or capabilities.supports_pty?, :pty},
-      {not has_user?(opts) or capabilities.supports_user?, :user},
-      {not has_env?(opts) or capabilities.supports_env?, :env},
-      {not has_cwd?(opts) or capabilities.supports_cwd?, :cwd}
-    ]
-    |> validate_family_capabilities(surface.surface_kind)
-  end
-
-  defp validate_run_capabilities(
-         %{adapter_capabilities: %Capabilities{} = capabilities, surface: surface},
-         %Command{} = command
-       ) do
-    [
-      {capabilities.supports_run?, :run},
-      {not has_user?(command) or capabilities.supports_user?, :user},
-      {not has_env?(command) or capabilities.supports_env?, :env},
-      {not has_cwd?(command) or capabilities.supports_cwd?, :cwd}
-    ]
-    |> validate_family_capabilities(surface.surface_kind)
-  end
-
-  defp validate_family_capabilities(checks, surface_kind) when is_list(checks) do
-    Enum.reduce_while(checks, :ok, fn {allowed?, capability}, :ok ->
-      case require_family_capability(allowed?, capability, surface_kind) do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
-  end
-
-  defp require_family_capability(true, _capability, _surface_kind), do: :ok
-
-  defp require_family_capability(false, capability, surface_kind) do
-    transport_error(Error.unsupported_capability(capability, surface_kind))
-  end
-
-  defp has_user?(opts) when is_list(opts) do
-    case Keyword.get(opts, :user) do
-      user when is_binary(user) and user != "" -> true
-      _other -> false
-    end
-  end
-
-  defp has_user?(%Command{user: user}) when is_binary(user) and user != "", do: true
-  defp has_user?(%Command{}), do: false
-
-  defp has_env?(opts) when is_list(opts) do
-    clear_env? = Keyword.get(opts, :clear_env?, false)
-
-    case Keyword.get(opts, :env, %{}) do
-      env when is_map(env) -> map_size(env) > 0 or clear_env?
-      env when is_list(env) -> env != [] or clear_env?
-      _other -> clear_env?
-    end
-  end
-
-  defp has_env?(%Command{env: env, clear_env?: clear_env?}) when is_map(env),
-    do: map_size(env) > 0 or clear_env?
-
-  defp has_env?(%Command{}), do: false
-
-  defp has_cwd?(opts) when is_list(opts) do
-    case Keyword.get(opts, :cwd) do
-      cwd when is_binary(cwd) and cwd != "" -> true
-      _other -> false
-    end
-  end
-
-  defp has_cwd?(%Command{cwd: cwd}) when is_binary(cwd) and cwd != "", do: true
-  defp has_cwd?(%Command{}), do: false
-
-  @doc """
-  Extracts a normalized transport event from a legacy mailbox message.
-
-  Tagged subscribers should use `extract_event/2` so their code does not depend
-  on a specific outer event tag.
-  """
   @spec extract_event(term()) :: {:ok, extracted_event()} | :error
-  def extract_event({:transport_message, line}) when is_binary(line), do: {:ok, {:message, line}}
-  def extract_event({:transport_data, chunk}) when is_binary(chunk), do: {:ok, {:data, chunk}}
-  def extract_event({:transport_error, %Error{} = error}), do: {:ok, {:error, error}}
-  def extract_event({:transport_stderr, chunk}) when is_binary(chunk), do: {:ok, {:stderr, chunk}}
-  def extract_event({:transport_exit, %ProcessExit{} = exit}), do: {:ok, {:exit, exit}}
-  def extract_event(_message), do: :error
+  def extract_event(message) do
+    case RuntimeTransport.extract_event(message) do
+      {:ok, event} -> {:ok, to_legacy_event(event)}
+      :error -> :error
+    end
+  end
 
-  @doc """
-  Extracts a normalized transport event for a tagged subscriber reference.
-
-  This is the stable core-owned way for adapters to consume tagged transport
-  delivery without hard-coding the configured outer event atom.
-  """
   @spec extract_event(term(), reference()) :: {:ok, extracted_event()} | :error
-  def extract_event({event_tag, ref, event}, ref) when is_atom(event_tag) do
-    extract_tagged_event(event)
+  def extract_event(message, ref) when is_reference(ref) do
+    case RuntimeTransport.extract_event(message, ref) do
+      {:ok, event} -> {:ok, to_legacy_event(event)}
+      :error -> :error
+    end
   end
 
   def extract_event(message, _ref), do: extract_event(message)
 
-  @doc """
-  Returns stable mailbox-delivery metadata for the current transport snapshot.
-  """
-  @spec delivery_info(t()) :: Delivery.t()
-  def delivery_info(transport) do
-    case info(transport) do
-      %Info{delivery: %Delivery{} = delivery} -> delivery
-      _other -> Delivery.new(:external_runtime_transport)
+  @spec delivery_info(t()) :: LegacyDelivery.t()
+  def delivery_info(transport) when is_pid(transport) do
+    transport
+    |> RuntimeTransport.delivery_info()
+    |> to_legacy_delivery()
+  end
+
+  defp normalize_opts(opts) do
+    opts
+    |> Keyword.put_new(:event_tag, :external_runtime_transport)
+    |> maybe_put_runtime_command(:command)
+    |> maybe_put_runtime_command(:invocation_override)
+  end
+
+  defp maybe_put_runtime_command(opts, key) do
+    case Keyword.get(opts, key) do
+      %Command{} = command -> Keyword.put(opts, key, to_runtime_command(command))
+      _other -> opts
     end
   end
 
-  defp extract_tagged_event({:message, line}) when is_binary(line), do: {:ok, {:message, line}}
-  defp extract_tagged_event({:data, chunk}) when is_binary(chunk), do: {:ok, {:data, chunk}}
-  defp extract_tagged_event({:error, %Error{} = error}), do: {:ok, {:error, error}}
-  defp extract_tagged_event({:stderr, chunk}) when is_binary(chunk), do: {:ok, {:stderr, chunk}}
-  defp extract_tagged_event({:exit, %ProcessExit{} = exit}), do: {:ok, {:exit, exit}}
-  defp extract_tagged_event(_event), do: :error
-
-  defp safe_call(transport, message, timeout \\ @default_call_timeout_ms)
-
-  defp safe_call(transport, message, timeout)
-       when is_pid(transport) and is_integer(timeout) and timeout >= 0 do
-    case TaskSupport.async_nolink(fn ->
-           try do
-             {:ok, GenServer.call(transport, message, :infinity)}
-           catch
-             :exit, reason -> {:error, normalize_call_exit(reason)}
-           end
-         end) do
-      {:ok, task} ->
-        await_task_result(task, timeout)
-
-      {:error, reason} ->
-        {:error, normalize_call_task_start_error(reason)}
-    end
+  defp normalize_transport_result({:error, {:transport, %RuntimeError{} = error}}) do
+    {:error, {:transport, to_legacy_error(error)}}
   end
 
-  defp await_task_result(task, timeout) do
-    case TaskSupport.await(task, timeout, :brutal_kill) do
-      {:ok, result} -> result
-      {:exit, reason} -> {:error, normalize_call_exit(reason)}
-      {:error, :timeout} -> {:error, Error.timeout()}
-    end
+  defp normalize_transport_result(other), do: other
+
+  defp normalize_run_result({:ok, %RuntimeRunResult{} = result}),
+    do: {:ok, to_legacy_run_result(result)}
+
+  defp normalize_run_result(other), do: normalize_transport_result(other)
+
+  defp to_runtime_command(%Command{} = command) do
+    ExecutionPlane.Command.new(
+      command.command,
+      command.args,
+      cwd: command.cwd,
+      env: command.env,
+      clear_env?: command.clear_env?,
+      user: command.user
+    )
   end
 
-  defp normalize_call_task_start_error(:noproc), do: Error.transport_stopped()
-  defp normalize_call_task_start_error(reason), do: Error.call_exit(reason)
+  defp to_legacy_command(nil), do: nil
 
-  defp normalize_call_exit({:noproc, _}), do: Error.not_connected()
-  defp normalize_call_exit(:noproc), do: Error.not_connected()
-  defp normalize_call_exit({:normal, _}), do: Error.not_connected()
-  defp normalize_call_exit({:shutdown, _}), do: Error.not_connected()
-  defp normalize_call_exit({:timeout, _}), do: Error.timeout()
-  defp normalize_call_exit(reason), do: Error.call_exit(reason)
-
-  defp normalize_call_result(:ok), do: :ok
-  defp normalize_call_result({:error, {:transport, %Error{}}} = error), do: error
-  defp normalize_call_result({:error, %Error{} = error}), do: transport_error(error)
-  defp normalize_call_result({:error, reason}), do: transport_error(reason)
-
-  defp normalize_call_result(other),
-    do: transport_error(Error.transport_error({:unexpected_task_result, other}))
-
-  defp do_force_close(transport, timeout_ms)
-       when is_pid(transport) and is_integer(timeout_ms) and timeout_ms >= 0 do
-    GenServer.stop(transport, :normal, timeout_ms)
-    :ok
-  catch
-    :exit, reason ->
-      transport_error(normalize_force_close_exit(reason))
+  defp to_legacy_command(%ExecutionPlane.Command{} = command) do
+    Command.new(
+      command.command,
+      command.args,
+      cwd: command.cwd,
+      env: command.env,
+      clear_env?: command.clear_env?,
+      user: command.user
+    )
   end
 
-  defp normalize_force_close_exit({:noproc, _}), do: Error.not_connected()
-  defp normalize_force_close_exit(:noproc), do: Error.not_connected()
-  defp normalize_force_close_exit({:normal, _}), do: Error.not_connected()
-  defp normalize_force_close_exit({:shutdown, _}), do: Error.not_connected()
-  defp normalize_force_close_exit({:timeout, {GenServer, :stop, _}}), do: Error.timeout()
-  defp normalize_force_close_exit({:timeout, _}), do: Error.timeout()
-  defp normalize_force_close_exit(reason), do: Error.call_exit(reason)
+  defp to_legacy_capabilities(nil), do: nil
 
-  defp transport_error({:transport, %Error{}} = error), do: {:error, error}
-  defp transport_error(%Error{} = error), do: {:error, {:transport, error}}
-  defp transport_error(reason), do: {:error, {:transport, Error.transport_error(reason)}}
+  defp to_legacy_capabilities(capabilities) do
+    capabilities
+    |> Map.from_struct()
+    |> Capabilities.new!()
+  end
+
+  defp to_legacy_delivery(nil), do: nil
+
+  defp to_legacy_delivery(%Delivery{tagged_event_tag: tagged_event_tag}) do
+    LegacyDelivery.new(tagged_event_tag)
+  end
+
+  defp to_legacy_error(%RuntimeError{} = error) do
+    %Error{
+      reason: error.reason,
+      message: error.message,
+      context: error.context
+    }
+  end
+
+  defp to_legacy_process_exit(%ExecutionPlane.ProcessExit{} = exit) do
+    %ProcessExit{
+      status: exit.status,
+      code: exit.code,
+      signal: exit.signal,
+      reason: exit.reason,
+      stderr: exit.stderr
+    }
+  end
+
+  defp to_legacy_run_result(%RuntimeRunResult{} = result) do
+    %RunResult{
+      invocation: to_legacy_command(result.invocation),
+      output: result.output,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exit: to_legacy_process_exit(result.exit),
+      stderr_mode: result.stderr_mode
+    }
+  end
+
+  defp to_legacy_info(%RuntimeInfo{} = info) do
+    %Info{
+      invocation: to_legacy_command(info.invocation),
+      pid: info.pid,
+      os_pid: info.os_pid,
+      surface_kind: info.surface_kind,
+      target_id: info.target_id,
+      lease_ref: info.lease_ref,
+      surface_ref: info.surface_ref,
+      boundary_class: info.boundary_class,
+      observability: info.observability,
+      adapter_capabilities: to_legacy_capabilities(info.adapter_capabilities),
+      effective_capabilities: to_legacy_capabilities(info.effective_capabilities),
+      bridge_profile: info.bridge_profile,
+      protocol_version: info.protocol_version,
+      extensions: info.extensions,
+      adapter_metadata: info.adapter_metadata,
+      status: info.status,
+      stdout_mode: info.stdout_mode,
+      stdin_mode: info.stdin_mode,
+      pty?: info.pty?,
+      interrupt_mode: info.interrupt_mode,
+      stderr: info.stderr,
+      delivery: to_legacy_delivery(info.delivery)
+    }
+  end
+
+  defp to_legacy_event({:error, %RuntimeError{} = error}), do: {:error, to_legacy_error(error)}
+
+  defp to_legacy_event({:exit, %ExecutionPlane.ProcessExit{} = exit}),
+    do: {:exit, to_legacy_process_exit(exit)}
+
+  defp to_legacy_event(event), do: event
 end

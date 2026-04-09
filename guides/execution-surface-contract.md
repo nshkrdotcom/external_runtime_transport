@@ -4,7 +4,8 @@ Execution Plane now owns the stable `execution_surface` contract for the lower
 runtime substrate.
 
 `ExternalRuntimeTransport.ExecutionSurface` remains as a legacy compatibility
-shell that preserves the historical public shape for existing callers.
+shell that preserves the historical public shape for existing callers. It is
+not the active owner for placement or transport behavior.
 
 ## Fields
 
@@ -49,7 +50,7 @@ The landed built-in kinds are:
 
 Execution Plane is now the architecture owner of this vocabulary. Public
 callers still choose among the landed kinds here, but this repo no longer owns
-the contract boundary for the moved minimal slice.
+the contract boundary or implementation for the moved lower-runtime slice.
 
 ## Capability Vocabulary
 
@@ -83,7 +84,7 @@ The public dispatch flow is:
 1. caller authors `execution_surface`
 2. `ExecutionSurface.resolve/1` validates and normalizes the surface
 3. `ExternalRuntimeTransport.Transport` enforces generic capability rules
-4. the resolved built-in adapter runs the family-specific logic
+4. the resolved Execution Plane-backed adapter runs the family-specific logic
 
 That keeps the public seam stable even as the underlying adapter family
 changes.

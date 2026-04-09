@@ -46,10 +46,7 @@ defmodule ExternalRuntimeTransport.Transport.SSHExecTest do
     assert :ok = Transport.end_input(transport)
 
     assert_receive {:external_runtime_transport, ^ref, {:data, "ssh:alpha\n"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
 
     assert FakeSSH.wait_until_written(fake_ssh, 1_000) == :ok
 
@@ -91,9 +88,7 @@ defmodule ExternalRuntimeTransport.Transport.SSHExecTest do
     assert :ok = Transport.interrupt(transport)
 
     assert_receive {:external_runtime_transport, ^ref, {:stderr, "interrupted\n"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref, {:exit, %ProcessExit{code: 130}}},
-                   2_000
+    assert {:exit, %ProcessExit{code: 130}} = assert_tagged_event(ref)
   end
 
   test "run/2 captures exact stdout, stderr, and exit data over SSHExec" do
@@ -177,6 +172,12 @@ defmodule ExternalRuntimeTransport.Transport.SSHExecTest do
   defp wait_until(fun, timeout_ms) when is_function(fun, 0) and is_integer(timeout_ms) do
     deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline_ms)
+  end
+
+  defp assert_tagged_event(ref, timeout \\ 2_000) do
+    assert_receive message, timeout
+    assert {:ok, event} = Transport.extract_event(message, ref)
+    event
   end
 
   defp do_wait_until(fun, deadline_ms) do

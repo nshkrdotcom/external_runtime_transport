@@ -1,10 +1,10 @@
 defmodule ExternalRuntimeTransport.Transport.LocalSubprocess do
   @moduledoc false
 
+  alias ExecutionPlane.Process.Transport.LocalSubprocess, as: RuntimeLocalSubprocess
   alias ExternalRuntimeTransport.ExecutionSurface.Adapter
   alias ExternalRuntimeTransport.ExecutionSurface.Capabilities
   alias ExternalRuntimeTransport.Transport
-  alias ExternalRuntimeTransport.Transport.Subprocess
 
   @behaviour Adapter
   @behaviour Transport
@@ -14,75 +14,53 @@ defmodule ExternalRuntimeTransport.Transport.LocalSubprocess do
 
   @impl Adapter
   def capabilities do
-    Capabilities.new!(
-      remote?: false,
-      startup_kind: :spawn,
-      path_semantics: :local,
-      supports_run?: true,
-      supports_streaming_stdio?: true,
-      supports_pty?: true,
-      supports_user?: true,
-      supports_env?: true,
-      supports_cwd?: true,
-      interrupt_kind: :signal
-    )
+    RuntimeLocalSubprocess.capabilities()
+    |> Map.from_struct()
+    |> Capabilities.new!()
   end
 
   @impl Adapter
-  def normalize_transport_options(nil), do: {:ok, []}
-
-  def normalize_transport_options(options) when is_list(options) do
-    if Keyword.keyword?(options) and options == [] do
-      {:ok, []}
-    else
-      {:error, {:invalid_transport_options, options}}
-    end
-  end
-
-  def normalize_transport_options(options) when is_map(options) and map_size(options) == 0,
-    do: {:ok, []}
-
-  def normalize_transport_options(options), do: {:error, {:invalid_transport_options, options}}
+  defdelegate normalize_transport_options(options), to: RuntimeLocalSubprocess
 
   @impl Transport
-  defdelegate start(opts), to: Subprocess
+  defdelegate start(opts), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate start_link(opts), to: Subprocess
+  defdelegate start_link(opts), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate run(command, opts), to: Subprocess
+  defdelegate run(command, opts), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate send(transport, message), to: Subprocess
+  defdelegate send(transport, message), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate subscribe(transport, pid), to: Subprocess
+  defdelegate subscribe(transport, pid), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate subscribe(transport, pid, tag), to: Subprocess
+  defdelegate subscribe(transport, pid, tag), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate unsubscribe(transport, pid), to: Subprocess
+  defdelegate unsubscribe(transport, pid), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate close(transport), to: Subprocess
+  defdelegate close(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate force_close(transport), to: Subprocess
+  defdelegate force_close(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate interrupt(transport), to: Subprocess
+  defdelegate interrupt(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate status(transport), to: Subprocess
+  defdelegate status(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate end_input(transport), to: Subprocess
+  defdelegate end_input(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate stderr(transport), to: Subprocess
+  defdelegate stderr(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 
   @impl Transport
-  defdelegate info(transport), to: Subprocess
+  defdelegate info(transport), to: ExternalRuntimeTransport.Transport.Subprocess
 end

@@ -38,7 +38,9 @@ The adapter negotiates:
 - effective capabilities
 - adapter metadata such as the negotiated bridge session reference
 
-The resulting metadata is exposed through `ExternalRuntimeTransport.Transport.Info`.
+The resulting metadata is exposed through
+`ExternalRuntimeTransport.Transport.Info` as a compatibility projection over
+the Execution Plane guest transport info surface.
 
 ## Path Semantics
 

@@ -15,10 +15,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
 
     assert_receive {:external_runtime_transport, ^ref, {:message, "alpha"}}, 2_000
     assert_receive {:external_runtime_transport, ^ref, {:message, "beta"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
 
     assert :disconnected == Subprocess.status(transport)
   end
@@ -29,7 +26,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert {:ok, _transport} = Subprocess.start(command: script, subscriber: {self(), :legacy})
 
     assert_receive {:transport_message, "legacy"}, 2_000
-    assert_receive {:transport_exit, %ProcessExit{status: :success, code: 0}}, 2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_legacy_event()
   end
 
   test "start returns a structured error when the command cannot be spawned" do
@@ -107,10 +104,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
 
     assert_receive {:external_runtime_transport, ^ref, {:message, ^long_line}}, 2_000
     assert_receive {:external_runtime_transport, ^ref, {:message, "next"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
   end
 
   test "raw stdout mode preserves exact bytes and exposes transport metadata" do
@@ -140,10 +134,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert :ok = Transport.end_input(transport)
 
     assert_receive {:external_runtime_transport, ^ref, {:data, "alpha"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
   end
 
   test "short-lived local subprocesses keep the shared exec worker stable across exits" do
@@ -161,10 +152,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
       monitor_ref = Process.monitor(exec_pid)
 
       assert_receive {:external_runtime_transport, ^ref, {:message, "ready"}}, 2_000
-
-      assert_receive {:external_runtime_transport, ^ref,
-                      {:exit, %ProcessExit{status: :success, code: 0}}},
-                     2_000
+      assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
 
       assert :disconnected == Transport.status(transport)
       refute_receive {:DOWN, ^monitor_ref, :process, ^exec_pid, _reason}, 0
@@ -201,9 +189,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
              Transport.info(transport)
 
     assert :ok = Transport.interrupt(transport)
-
-    assert_receive {:external_runtime_transport, ^ref, {:exit, %ProcessExit{code: 130}}},
-                   2_000
+    assert {:exit, %ProcessExit{code: 130}} = assert_tagged_event(ref)
   end
 
   test "close_stdin_on_start closes stdin immediately after boot" do
@@ -223,10 +209,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
              )
 
     assert_receive {:external_runtime_transport, ^ref, {:message, "done"}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
   end
 
   test "last unsubscribe starts the headless timeout" do
@@ -326,9 +309,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert_receive {:external_runtime_transport, ^ref, {:message, "out"}}, 2_000
     assert_receive {:stderr_line, "err-two"}, 2_000
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0, stderr: "\nerr-two"}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0, stderr: "\nerr-two"}} =
+             assert_tagged_event(ref)
   end
 
   test "extract_event unwraps legacy transport tuples" do
@@ -361,9 +343,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert_receive {:external_runtime_transport, ^ref, {:stderr, "late stderr"}}, 2_000
     File.write!(gate_path, "release")
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0, stderr: "late stderr"}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0, stderr: "late stderr"}} =
+             assert_tagged_event(ref)
   end
 
   test "fast-exit stderr is retained for late subscribers" do
@@ -380,9 +361,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
 
     assert_receive {:external_runtime_transport, ^ref, {:stderr, "fast stderr"}}, 2_000
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0, stderr: "fast stderr"}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0, stderr: "fast stderr"}} =
+             assert_tagged_event(ref)
   end
 
   test "oversized stdout below the recoverable ceiling is chunk-recovered intact" do
@@ -408,10 +388,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
 
     assert_receive {:external_runtime_transport, ^ref, {:message, ^long_line}}, 5_000
     assert_receive {:external_runtime_transport, ^ref, {:message, "after"}}, 5_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   5_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref, 5_000)
   end
 
   test "oversized stdout above the recoverable ceiling emits a fatal structured overflow" do
@@ -441,10 +418,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
                max_recoverable_line_bytes: 64
              )
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:error,
-                     %Error{reason: {:buffer_overflow, actual_size, 64}, context: context}}},
-                   5_000
+    assert {:error, %Error{reason: {:buffer_overflow, actual_size, 64}, context: context}} =
+             assert_tagged_event(ref, 5_000)
 
     assert actual_size > 64
     assert context.mode == :chunk_then_fail
@@ -455,9 +430,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert context.chunk_count > 0
     assert context.first_fatal? == true
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :error, reason: {:buffer_overflow, _, 64}}}},
-                   5_000
+    assert {:exit, %ProcessExit{status: :error, reason: {:buffer_overflow, _, 64}}} =
+             assert_tagged_event(ref, 5_000)
 
     refute_receive {:external_runtime_transport, ^ref, {:message, "after"}}, 250
     assert :disconnected == Subprocess.status(transport)
@@ -480,10 +454,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
              )
 
     assert_receive {:external_runtime_transport, ^ref, {:message, ^large_line}}, 5_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   5_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref, 5_000)
   end
 
   test "post-exit stdout flush preserves the trailing fragment exactly" do
@@ -494,10 +465,7 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     assert {:ok, _transport} = Subprocess.start(command: script, subscriber: {self(), ref})
 
     assert_receive {:external_runtime_transport, ^ref, {:message, ^fragment}}, 2_000
-
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
   end
 
   test "interrupt supports in-flight subprocesses and surfaces the resulting exit" do
@@ -516,7 +484,8 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
 
     assert :ok = Transport.interrupt(transport)
 
-    assert_receive {:external_runtime_transport, ^ref, {:exit, %ProcessExit{} = exit}}, 2_000
+    assert {:stderr, "interrupted\n"} = assert_tagged_event(ref)
+    assert {:exit, %ProcessExit{} = exit} = assert_tagged_event(ref)
     refute ProcessExit.successful?(exit)
   end
 
@@ -637,6 +606,18 @@ defmodule ExternalRuntimeTransport.Transport.SubprocessTest do
     end)
 
     Path.join(dir, name)
+  end
+
+  defp assert_tagged_event(ref, timeout \\ 2_000) do
+    assert_receive message, timeout
+    assert {:ok, event} = Transport.extract_event(message, ref)
+    event
+  end
+
+  defp assert_legacy_event(timeout \\ 2_000) do
+    assert_receive message, timeout
+    assert {:ok, event} = Transport.extract_event(message)
+    event
   end
 
   defp wait_until(fun, timeout_ms) when is_function(fun, 0) and is_integer(timeout_ms) do

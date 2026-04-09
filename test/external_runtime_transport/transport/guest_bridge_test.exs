@@ -66,9 +66,12 @@ defmodule ExternalRuntimeTransport.Transport.GuestBridgeTest do
 
     assert_receive {:external_runtime_transport, ^ref, {:data, "guest-session:alpha"}}, 2_000
     assert_receive {:external_runtime_transport, ^ref, {:stderr, "guest-session-stderr\n"}}, 2_000
+    assert {:exit, %ProcessExit{status: :success, code: 0}} = assert_tagged_event(ref)
+  end
 
-    assert_receive {:external_runtime_transport, ^ref,
-                    {:exit, %ProcessExit{status: :success, code: 0}}},
-                   2_000
+  defp assert_tagged_event(ref, timeout \\ 2_000) do
+    assert_receive message, timeout
+    assert {:ok, event} = Transport.extract_event(message, ref)
+    event
   end
 end
